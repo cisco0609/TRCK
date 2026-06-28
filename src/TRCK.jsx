@@ -38,7 +38,37 @@ async function callClaude(system, user, maxTokens = 1000) {
     body: JSON.stringify({ system, max_tokens: maxTokens, messages: [{ role: "user", content: user }] }),
   });
   const data = await res.json();
+  if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
   return data.content?.[0]?.text || "";
+}
+
+// Robust JSON extraction — handles markdown fences, preamble text, and
+// responses that got truncated mid-object by closing open braces/brackets.
+function extractJSON(raw) {
+  let s = raw.replace(/```json|```/g, "").trim();
+  // grab from first { to the structure's end
+  const start = s.indexOf("{");
+  if (start > 0) s = s.slice(start);
+  try { return JSON.parse(s); } catch (e) {}
+  // Attempt repair: if truncated, close any unclosed strings/brackets.
+  let depth = 0, inStr = false, prev = "", lastGood = -1, repaired = "";
+  const stack = [];
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    repaired += c;
+    if (inStr) { if (c === '"' && prev !== "\\") inStr = false; prev = c; continue; }
+    if (c === '"') inStr = true;
+    else if (c === "{" || c === "[") stack.push(c === "{" ? "}" : "]");
+    else if (c === "}" || c === "]") { stack.pop(); if (stack.length === 0) lastGood = i; }
+    prev = c;
+  }
+  // try parsing up to the last fully-closed top-level object
+  if (lastGood > 0) { try { return JSON.parse(s.slice(0, lastGood + 1)); } catch (e) {} }
+  // last resort: close whatever's open
+  let fix = repaired;
+  if (inStr) fix += '"';
+  while (stack.length) fix += stack.pop();
+  return JSON.parse(fix);
 }
 
 // ── STORAGE ────────────────────────────────────────────────────────────────────
@@ -243,7 +273,7 @@ function Onboarding({ onDone }) {
       const nutrition = computeNutrition({ weightLbs: parseFloat(form.weightLbs), goalWeightLbs: parseFloat(form.goalWeightLbs), heightIn: parseFloat(form.heightIn), age: parseFloat(form.age), sex: form.sex, dietMode: form.dietMode });
 
       // Generate only first 4 weeks in detail to stay within token limits; rest generated on demand
-      const buildWeeks = Math.min(weeks, 4);
+      const buildWeeks = Math.min(weeks, 2);
       const raceGoal = form.goals.find(g => g.startsWith("Race"));
       const wantsWeightLoss = form.goals.includes("Lose weight");
       const goalsLine = form.goals.join(", ");
@@ -283,8 +313,8 @@ Return ONLY valid JSON, no markdown:
   ]
 }`;
 
-      const raw = await callClaude("Return only valid JSON. No markdown. No commentary.", prompt, 4000);
-      const plan = JSON.parse(raw.replace(/```json|```/g, "").trim());
+      const raw = await callClaude("Return only valid JSON. No markdown. No commentary.", prompt, 8000);
+      const plan = extractJSON(raw);
       plan.totalWeeks = weeks;
 
       const profile = { ...form, startDate: today, createdAt: Date.now(), nutrition, totalWeeks: weeks, weightHistory: [{ date: today, weight: parseFloat(form.weightLbs) }] };
@@ -511,7 +541,7 @@ function WeekCalendar({ plan, logs, currentWeek, setCurrentWeek, onSelectWorkout
       </div>
 
       {rearrange && <div style={{ color: C.muted, fontSize: 11, marginTop: 10, lineHeight: 1.5 }}>Moving a workout swaps it with the day you tap, so your week stays in order. Heads up: stacking two hard days back-to-back isn't ideal for recovery.</div>}
-      {!rearrange && needsMore && <button style={{ ...S.btnGold, marginTop: 14, width: "100%" }} onClick={onExtendPlan} disabled={extending}>{extending ? "Coach is building next block..." : "Build Next 4 Weeks →"}</button>}
+      {!rearrange && needsMore && <button style={{ ...S.btnGold, marginTop: 14, width: "100%" }} onClick={onExtendPlan} disabled={extending}>{extending ? "Coach is building next block..." : "Build Next 2 Weeks →"}</button>}
     </div>
   );
 }
@@ -724,7 +754,7 @@ export default function TRCK() {
     try {
       const built = plan.weeks.length;
       const nextStart = built + 1;
-      const nextEnd = Math.min(built + 4, plan.totalWeeks);
+      const nextEnd = Math.min(built + 2, plan.totalWeeks);
       const lastDate = plan.weeks[built - 1].workouts[plan.weeks[built - 1].workouts.length - 1].date;
       const startDate = `${new Date(new Date(lastDate).getTime() + 86400000).toISOString().slice(0,10)}`;
       const recentLogs = logs.slice(-10).map(l => `${l.date}: ${l.workoutTitle} (felt ${l.felt}/5)`).join("; ");
@@ -735,8 +765,8 @@ Recent training (adapt based on how they felt): ${recentLogs || "none yet"}
 These weeks start ${startDate}. Progress the periodization appropriately (this is week ${nextStart}+ of ${plan.totalWeeks}).
 Same coaching rules: no hard run after legs, protect long run, real rest, progress load.
 Return ONLY valid JSON: { "weeks": [ {same schema as before with weekNumber ${nextStart}+} ] }`;
-      const raw = await callClaude("Return only valid JSON. No markdown.", prompt, 4000);
-      const result = JSON.parse(raw.replace(/```json|```/g, "").trim());
+      const raw = await callClaude("Return only valid JSON. No markdown.", prompt, 8000);
+      const result = extractJSON(raw);
       const updated = { ...plan, weeks: [...plan.weeks, ...result.weeks] };
       setPlan(updated); await save("trck_plan", updated);
       setCurrentWeek(built);
