@@ -1,669 +1,555 @@
 import { useState, useEffect } from "react";
 
-// ── CONSTANTS ──────────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+//  TRCK — Francisco's personal training coach. No quiz, data baked in.
+//  206→145 · sub-20 5K · 5-day split · fully editable.
+// ════════════════════════════════════════════════════════════════════════════
+
 const C = {
-  bg: "#0A0A0A", surface: "#111111", surface2: "#1A1A1A", border: "#222222",
-  gold: "#F5C842", emerald: "#10B981", red: "#EF4444", purple: "#8B5CF6",
-  orange: "#F97316", text: "#FFFFFF", muted: "#666666",
+  bg:"#0A0A0A", surface:"#111111", surface2:"#1A1A1A", border:"#222222",
+  gold:"#F5C842", emerald:"#10B981", red:"#EF4444", purple:"#8B5CF6",
+  orange:"#F97316", blue:"#3B82F6", cyan:"#06B6D4", pink:"#EC4899",
+  text:"#FFFFFF", muted:"#666666",
 };
 const FONT = `'Inter', system-ui, -apple-system, sans-serif`;
 
-// ── STYLES ─────────────────────────────────────────────────────────────────────
-const S = {
-  app: { background: C.bg, minHeight: "100vh", fontFamily: FONT, color: C.text, display: "flex", flexDirection: "column" },
-  nav: { background: C.surface, borderBottom: `1px solid ${C.border}`, padding: "0 24px", display: "flex", alignItems: "center", justifyContent: "space-between", height: 56, position: "sticky", top: 0, zIndex: 100 },
-  logo: { fontWeight: 900, fontSize: 20, letterSpacing: "0.15em", color: C.gold },
-  main: { flex: 1, padding: "24px 16px", maxWidth: 900, margin: "0 auto", width: "100%", boxSizing: "border-box" },
-  card: { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20, marginBottom: 16 },
-  cardTitle: { fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", color: C.muted, textTransform: "uppercase", marginBottom: 12 },
-  h1: { fontSize: 26, fontWeight: 800, marginBottom: 4 },
-  label: { fontSize: 13, color: C.muted, marginBottom: 6, display: "block" },
-  input: { background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 14px", color: C.text, fontSize: 14, width: "100%", outline: "none", fontFamily: FONT, boxSizing: "border-box" },
-  select: { background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 14px", color: C.text, fontSize: 14, width: "100%", outline: "none", fontFamily: FONT, boxSizing: "border-box", appearance: "none" },
-  btnGold: { background: C.gold, color: "#000", border: "none", borderRadius: 8, padding: "12px 24px", fontWeight: 800, fontSize: 14, cursor: "pointer", fontFamily: FONT, letterSpacing: "0.05em" },
-  btnEmerald: { background: C.emerald, color: "#000", border: "none", borderRadius: 8, padding: "10px 20px", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: FONT },
-  btnGhost: { background: "transparent", color: C.muted, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 20px", fontWeight: 600, fontSize: 13, cursor: "pointer", fontFamily: FONT },
-  btnRed: { background: "transparent", color: C.red, border: `1px solid ${C.red}`, borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 12, cursor: "pointer", fontFamily: FONT },
-  tag: (color) => ({ display: "inline-block", background: color + "22", color, borderRadius: 6, padding: "3px 10px", fontSize: 11, fontWeight: 700, letterSpacing: "0.05em" }),
-  grid2: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },
-  grid3: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 },
-  divider: { borderTop: `1px solid ${C.border}`, margin: "16px 0" },
-  pill: (active) => ({ padding: "6px 14px", borderRadius: 20, fontSize: 12, fontWeight: 700, cursor: "pointer", border: active ? `1px solid ${C.gold}` : `1px solid ${C.border}`, background: active ? C.gold + "22" : "transparent", color: active ? C.gold : C.muted, fontFamily: FONT }),
+const PROFILE = {
+  name:"Francisco", startWeight:206, goalWeight:145, heightIn:67, age:26,
+  goal5k:"20:00", current5k:"28:00", calories:1800, protein:148,
+  refeedCalories:2600, refeedDay:6, weighDays:[3,6],
 };
 
-// ── API ────────────────────────────────────────────────────────────────────────
-async function callClaude(system, user, maxTokens = 1000) {
-  const res = await fetch("/api/claude", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ system, max_tokens: maxTokens, messages: [{ role: "user", content: user }] }),
-  });
-  const data = await res.json();
-  if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
-  return data.content?.[0]?.text || "";
-}
+// Fixed weekly split by day-of-week (0=Sun)
+const TEMPLATE = {
+  0:{type:"Rest",title:"Rest Day",effort:"Rest"},
+  1:{type:"Push",title:"Push + Core",effort:"Moderate"},
+  2:{type:"Easy Run",title:"Easy Run",effort:"Easy"},
+  3:{type:"Pull",title:"Pull + Core",effort:"Moderate"},
+  4:{type:"Intervals",title:"Speed Intervals",effort:"Hard"},
+  5:{type:"Legs",title:"Easy Run + Legs",effort:"Moderate"},
+  6:{type:"Long Run",title:"Long Run",effort:"Moderate"},
+};
 
-// Robust JSON extraction — handles markdown fences, preamble text, and
-// responses that got truncated mid-object by closing open braces/brackets.
-function extractJSON(raw) {
-  let s = raw.replace(/```json|```/g, "").trim();
-  // grab from first { to the structure's end
-  const start = s.indexOf("{");
-  if (start > 0) s = s.slice(start);
-  try { return JSON.parse(s); } catch (e) {}
-  // Attempt repair: if truncated, close any unclosed strings/brackets.
-  let depth = 0, inStr = false, prev = "", lastGood = -1, repaired = "";
-  const stack = [];
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-    repaired += c;
-    if (inStr) { if (c === '"' && prev !== "\\") inStr = false; prev = c; continue; }
-    if (c === '"') inStr = true;
-    else if (c === "{" || c === "[") stack.push(c === "{" ? "}" : "]");
-    else if (c === "}" || c === "]") { stack.pop(); if (stack.length === 0) lastGood = i; }
-    prev = c;
-  }
-  // try parsing up to the last fully-closed top-level object
-  if (lastGood > 0) { try { return JSON.parse(s.slice(0, lastGood + 1)); } catch (e) {} }
-  // last resort: close whatever's open
-  let fix = repaired;
-  if (inStr) fix += '"';
-  while (stack.length) fix += stack.pop();
+const PHASES = [
+  {name:"Base", weeks:"1–10", color:"#10B981", desc:"Build aerobic engine + drop weight fastest. Mostly easy miles, lift to hold muscle."},
+  {name:"Build", weeks:"11–20", color:"#F5C842", desc:"Add real speed as you get lighter. Paces drop. Strength maintains."},
+  {name:"Sharpen", weeks:"21–28", color:"#F97316", desc:"Race-specific. Closing on 145 & sub-20. Peak then taper."},
+];
+
+// ── STYLES ───────────────────────────────────────────────────────────────────
+const S = {
+  app:{background:C.bg,minHeight:"100vh",fontFamily:FONT,color:C.text,display:"flex",flexDirection:"column"},
+  nav:{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"0 20px",display:"flex",alignItems:"center",justifyContent:"space-between",height:56,position:"sticky",top:0,zIndex:100},
+  logo:{fontWeight:900,fontSize:20,letterSpacing:"0.2em",color:C.gold},
+  main:{flex:1,padding:"20px 16px",maxWidth:680,margin:"0 auto",width:"100%",boxSizing:"border-box"},
+  card:{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:18,marginBottom:14},
+  ct:{fontSize:11,fontWeight:700,letterSpacing:"0.1em",color:C.muted,textTransform:"uppercase",marginBottom:12},
+  h1:{fontSize:26,fontWeight:800,marginBottom:4},
+  label:{fontSize:13,color:C.muted,marginBottom:6,display:"block"},
+  input:{background:C.surface2,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",color:C.text,fontSize:14,width:"100%",outline:"none",fontFamily:FONT,boxSizing:"border-box"},
+  select:{background:C.surface2,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",color:C.text,fontSize:14,width:"100%",outline:"none",fontFamily:FONT,boxSizing:"border-box",appearance:"none"},
+  btnGold:{background:C.gold,color:"#000",border:"none",borderRadius:10,padding:"12px 22px",fontWeight:800,fontSize:14,cursor:"pointer",fontFamily:FONT},
+  btnEmerald:{background:C.emerald,color:"#000",border:"none",borderRadius:10,padding:"10px 20px",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:FONT},
+  btnGhost:{background:"transparent",color:C.muted,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 18px",fontWeight:600,fontSize:13,cursor:"pointer",fontFamily:FONT},
+  btnRed:{background:"transparent",color:C.red,border:`1px solid ${C.red}`,borderRadius:8,padding:"8px 16px",fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:FONT},
+  tag:(c)=>({display:"inline-block",background:c+"22",color:c,borderRadius:6,padding:"3px 10px",fontSize:11,fontWeight:700,letterSpacing:"0.05em"}),
+  grid2:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12},
+  grid3:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12},
+  divider:{borderTop:`1px solid ${C.border}`,margin:"16px 0"},
+};
+
+// ── API + STORAGE ─────────────────────────────────────────────────────────────
+async function callClaude(system, user, maxTokens=2000){
+  const res = await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({system,max_tokens:maxTokens,messages:[{role:"user",content:user}]})});
+  const data = await res.json();
+  if(data.error) throw new Error(data.error.message||JSON.stringify(data.error));
+  return data.content?.[0]?.text||"";
+}
+function extractJSON(raw){
+  let s=raw.replace(/```json|```/g,"").trim();
+  const start=s.indexOf("{"); if(start>0) s=s.slice(start);
+  try{return JSON.parse(s);}catch(e){}
+  let inStr=false,prev="",lastGood=-1; const stack=[];
+  for(let i=0;i<s.length;i++){const c=s[i];
+    if(inStr){if(c==='"'&&prev!=="\\")inStr=false;prev=c;continue;}
+    if(c==='"')inStr=true; else if(c==="{"||c==="[")stack.push(c==="{"?"}":"]");
+    else if(c==="}"||c==="]"){stack.pop();if(stack.length===0)lastGood=i;} prev=c;}
+  if(lastGood>0){try{return JSON.parse(s.slice(0,lastGood+1));}catch(e){}}
+  let fix=s; if(inStr)fix+='"'; while(stack.length)fix+=stack.pop();
   return JSON.parse(fix);
 }
+async function save(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}}
+async function load(k){try{const r=localStorage.getItem(k);return r?JSON.parse(r):null;}catch{return null;}}
 
-// ── STORAGE ────────────────────────────────────────────────────────────────────
-async function save(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {} }
-async function load(key) { try { const r = localStorage.getItem(key); return r ? JSON.parse(r) : null; } catch { return null; } }
-async function del(key) { try { localStorage.removeItem(key); } catch {} }
+// ── DATES ─────────────────────────────────────────────────────────────────────
+const DAY_ABBR=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const DAY_FULL=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+const MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function iso(d){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
+function todayStr(){return iso(new Date());}
+function addDays(s,n){const d=new Date(s+"T00:00:00");d.setDate(d.getDate()+n);return iso(d);}
+function fmtDate(s){const d=new Date(s+"T00:00:00");return `${DAY_ABBR[d.getDay()]} ${MONTHS[d.getMonth()]} ${d.getDate()}`;}
+function dow(s){return new Date(s+"T00:00:00").getDay();}
+function prettyToday(){const d=new Date();return `${DAY_FULL[d.getDay()]}, ${MONTHS[d.getMonth()]} ${d.getDate()}`;}
 
-// ── HELPERS ────────────────────────────────────────────────────────────────────
-const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-function todayStr() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
-function fmtDate(str) { const d = new Date(str+"T00:00:00"); return `${DAYS[d.getDay()]} ${MONTHS[d.getMonth()]} ${d.getDate()}`; }
+// ── PACE ENGINE ───────────────────────────────────────────────────────────────
+function paceTimeToSec(str){if(!str)return null;const p=String(str).trim().split(":").map(Number);if(p.some(isNaN))return null;return p.length===2?p[0]*60+p[1]:p.length===3?p[0]*3600+p[1]*60+p[2]:null;}
+function secToPace(s){if(s==null||isNaN(s))return "—";let m=Math.floor(s/60),sec=Math.round(s%60);if(sec===60){m+=1;sec=0;}return `${m}:${String(sec).padStart(2,"0")}`;}
+function computePaces(f){const sec=paceTimeToSec(f);if(!sec)return null;const rp=sec/3.10686;return{racePace5k:rp,interval:rp*0.985,threshold:rp*1.06,tempo:rp*1.08,marathon:rp*1.13,easy:rp*1.22,long:rp*1.25,recovery:rp*1.30};}
+function paceZones(f){const p=computePaces(f);if(!p)return null;const r=(s,sp)=>`${secToPace(s-sp)}–${secToPace(s+sp)}/mi`;return{Recovery:r(p.recovery,8),Easy:r(p.easy,8),Long:r(p.long,8),Marathon:r(p.marathon,5),Tempo:r(p.tempo,4),Threshold:r(p.threshold,4),Interval:r(p.interval,3),"5K Race":r(p.racePace5k,3)};}
 
-function typeColor(type) {
-  if (!type) return C.muted;
-  const t = type.toLowerCase();
-  if (t.includes("rest")) return C.muted;
-  if (t.includes("push")) return "#3B82F6";
-  if (t.includes("pull")) return "#06B6D4";
-  if (t.includes("leg")) return C.red;
-  if (t.includes("core")) return "#EC4899";
-  if (t.includes("strength") || t.includes("lift") || t.includes("upper") || t.includes("lower")) return "#3B82F6";
-  if (t.includes("interval") || t.includes("speed") || t.includes("repeat")) return C.orange;
-  if (t.includes("tempo") || t.includes("threshold")) return C.gold;
-  if (t.includes("long")) return C.purple;
-  if (t.includes("easy") || t.includes("recovery")) return C.emerald;
-  if (t.includes("run")) return C.emerald;
-  return C.text;
-}
-function isRun(type) {
-  const t = (type || "").toLowerCase();
-  return t.includes("run") || t.includes("interval") || t.includes("tempo") || t.includes("long") || t.includes("recovery") || t.includes("threshold") || t.includes("speed") || t.includes("repeat");
-}
-
-// ── NUTRITION MATH ─────────────────────────────────────────────────────────────
-// Mifflin-St Jeor + activity, then apply deficit by diet personality
-function computeNutrition({ weightLbs, goalWeightLbs, heightIn, age, sex, dietMode }) {
-  const kg = weightLbs * 0.453592;
-  const cm = heightIn * 2.54;
-  let bmr = 10 * kg + 6.25 * cm - 5 * age + (sex === "female" ? -161 : 5);
-  // Active: training + on-feet overnight job
-  const tdee = Math.round(bmr * 1.55);
-  const deficits = { balanced: 0.20, moderate: 0.27, aggressive: 0.35 };
-  const lossRate = { balanced: "0.5-1 lb/wk", moderate: "1-1.5 lb/wk", aggressive: "~2 lb/wk" };
-  const cals = Math.round(tdee * (1 - (deficits[dietMode] || 0.27)));
-  // Protein anchored to GOAL weight (~1 g/lb) to protect muscle without overshooting
-  const goal = goalWeightLbs || weightLbs;
-  const protein = Math.round(goal * 1.0);
-  const fat = Math.round((cals * 0.25) / 9);
-  const carbs = Math.round((cals - protein * 4 - fat * 9) / 4);
-  return { tdee, cals, protein, carbs: Math.max(carbs, 0), fat, lossRate: lossRate[dietMode] || lossRate.moderate };
+// ── WEIGHT / GOAL DATE ────────────────────────────────────────────────────────
+function weeklyAverage(history){if(!history||!history.length)return null;const cutoff=addDays(todayStr(),-7);const recent=history.filter(h=>h.date>=cutoff);const use=recent.length?recent:history.slice(-3);return use.reduce((s,h)=>s+h.weight,0)/use.length;}
+function projectGoalDate(history){
+  if(!history||history.length<2)return null;
+  const start=history[0],last=history[history.length-1];
+  const daysElapsed=(new Date(last.date)-new Date(start.date))/86400000;
+  if(daysElapsed<5)return {date:null,note:"Need ~1 week of data for an estimate"};
+  const lost=start.weight-last.weight; const rate=lost/(daysElapsed/7);
+  if(rate<=0.1)return {date:null,rate,note:"No clear loss trend yet — keep going"};
+  const remaining=last.weight-PROFILE.goalWeight;
+  if(remaining<=0)return {date:"Goal reached! 🎉",rate,weeksLeft:0};
+  const weeksLeft=remaining/rate; const d=new Date(); d.setDate(d.getDate()+Math.round(weeksLeft*7));
+  return {date:`${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`,rate,weeksLeft};
 }
 
-// ── ONBOARDING ─────────────────────────────────────────────────────────────────
-function Onboarding({ onDone }) {
-  const [step, setStep] = useState(0);
-  const [form, setForm] = useState({
-    name: "", goals: [], raceDistance: "", raceDate: "", fiveKTime: "",
-    weightLbs: "206", goalWeightLbs: "145", heightIn: "67", age: "26", sex: "male",
-    dietMode: "aggressive",
-    runDaysPerWeek: "4", liftDaysPerWeek: "3", longRunDay: "Saturday",
-    experience: "intermediate", trainingNotes: "", shoes: "",
-  });
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-  const toggleGoal = (g) => setForm(f => ({ ...f, goals: f.goals.includes(g) ? f.goals.filter(x => x !== g) : [...f.goals, g] }));
-  const racingGoal = form.goals.some(g => g.startsWith("Race"));
+// ── COLORS ────────────────────────────────────────────────────────────────────
+function typeColor(t){if(!t)return C.muted;t=t.toLowerCase();if(t.includes("rest"))return C.muted;if(t.includes("push"))return C.blue;if(t.includes("pull"))return C.cyan;if(t.includes("leg"))return C.red;if(t.includes("core"))return C.pink;if(t.includes("interval")||t.includes("speed"))return C.orange;if(t.includes("tempo")||t.includes("threshold"))return C.gold;if(t.includes("long"))return C.purple;if(t.includes("easy")||t.includes("recovery")||t.includes("run"))return C.emerald;return C.text;}
+function isRun(t){t=(t||"").toLowerCase();return t.includes("run")||t.includes("interval")||t.includes("tempo")||t.includes("long")||t.includes("recovery")||t.includes("threshold")||t.includes("speed");}
 
-  const nutritionPreview = computeNutrition({
-    weightLbs: parseFloat(form.weightLbs) || 206,
-    goalWeightLbs: parseFloat(form.goalWeightLbs) || 145,
-    heightIn: parseFloat(form.heightIn) || 67,
-    age: parseFloat(form.age) || 26,
-    sex: form.sex, dietMode: form.dietMode,
-  });
-
-  const steps = [
-    {
-      title: "Welcome to TRCK", sub: "Your personal coach. Let's learn about you and build a real plan.",
-      fields: <div><label style={S.label}>Your name</label><input style={S.input} placeholder="Francisco" value={form.name} onChange={e => set("name", e.target.value)} /></div>,
-    },
-    {
-      title: "Your Goals", sub: "Pick everything that matters — the coach builds one plan around all of it.",
-      fields: <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {[
-          { g: "Lose weight", d: "Drop body fat toward your goal weight" },
-          { g: "Get fit", d: "Build overall conditioning and consistency" },
-          { g: "Build endurance", d: "Go longer, raise your aerobic base" },
-          { g: "Race (5K)", d: "Train to race a 5K" },
-          { g: "Race (10K)", d: "Train to race a 10K" },
-          { g: "Race (Half Marathon)", d: "Train to race a half" },
-          { g: "Race (Marathon)", d: "Train to race a marathon" },
-        ].map(({ g, d }) => {
-          const on = form.goals.includes(g);
-          return (
-            <button key={g} style={{ ...S.btnGhost, textAlign: "left", padding: "12px 16px", borderColor: on ? C.gold : C.border, display: "flex", alignItems: "center", gap: 12 }} onClick={() => toggleGoal(g)}>
-              <div style={{ width: 22, height: 22, borderRadius: 6, flexShrink: 0, border: `2px solid ${on ? C.gold : C.muted}`, background: on ? C.gold : "transparent", color: "#000", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 900, fontSize: 14 }}>{on ? "✓" : ""}</div>
-              <div><div style={{ color: on ? C.gold : C.text, fontWeight: 700 }}>{g}</div><div style={{ color: C.muted, fontSize: 12, marginTop: 1 }}>{d}</div></div>
-            </button>
-          );
-        })}
-        {form.goals.filter(g => g.startsWith("Race")).length > 1 && (
-          <div style={{ color: C.orange, fontSize: 12, marginTop: 2 }}>Heads up — pick one race distance to train toward. The coach peaks you for a single race.</div>
-        )}
-      </div>,
-    },
-    {
-      title: racingGoal ? "Race Date" : "Goal Date",
-      sub: racingGoal ? "When's your race? This sets your peak and timeline." : "When do you want to hit your goal? This sets your timeline.",
-      fields: <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        <div><label style={S.label}>{racingGoal ? "Race date" : "Target date"}</label><input style={S.input} type="date" value={form.raceDate} onChange={e => set("raceDate", e.target.value)} /></div>
-        <div><label style={S.label}>Current 5K time (e.g. 28:00) — optional but sharpens paces</label><input style={S.input} placeholder="28:00" value={form.fiveKTime} onChange={e => set("fiveKTime", e.target.value)} /></div>
-      </div>,
-    },
-    {
-      title: "Your Body", sub: "This powers your calorie and weight-loss targets.",
-      fields: <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        <div style={S.grid2}>
-          <div><label style={S.label}>Current weight (lbs)</label><input style={S.input} type="number" value={form.weightLbs} onChange={e => set("weightLbs", e.target.value)} /></div>
-          <div><label style={S.label}>Goal weight (lbs)</label><input style={S.input} type="number" value={form.goalWeightLbs} onChange={e => set("goalWeightLbs", e.target.value)} /></div>
-        </div>
-        <div style={S.grid3}>
-          <div><label style={S.label}>Height (in)</label><input style={S.input} type="number" value={form.heightIn} onChange={e => set("heightIn", e.target.value)} /></div>
-          <div><label style={S.label}>Age</label><input style={S.input} type="number" value={form.age} onChange={e => set("age", e.target.value)} /></div>
-          <div><label style={S.label}>Sex</label><select style={S.select} value={form.sex} onChange={e => set("sex", e.target.value)}><option value="male">Male</option><option value="female">Female</option></select></div>
-        </div>
-      </div>,
-    },
-    {
-      title: "Diet Personality", sub: "How fast do you want to lose? Protein stays high either way to protect muscle.",
-      fields: <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {[
-          { k: "balanced", l: "Balanced", s: "0.5–1 lb/wk · easiest to sustain" },
-          { k: "moderate", l: "Moderate", s: "1–1.5 lb/wk · steady progress" },
-          { k: "aggressive", l: "Aggressive", s: "~2 lb/wk · fastest safe rate" },
-        ].map(({ k, l, s }) => (
-          <button key={k} style={{ ...S.btnGhost, textAlign: "left", padding: "12px 16px", borderColor: form.dietMode === k ? C.gold : C.border }} onClick={() => set("dietMode", k)}>
-            <div style={{ color: form.dietMode === k ? C.gold : C.text, fontWeight: 700 }}>{l}</div>
-            <div style={{ color: C.muted, fontSize: 12, marginTop: 2 }}>{s}</div>
-          </button>
-        ))}
-        <div style={{ background: C.surface2, borderRadius: 8, padding: 14, marginTop: 4 }}>
-          <div style={{ color: C.muted, fontSize: 11, fontWeight: 700, marginBottom: 8 }}>YOUR DAILY TARGET</div>
-          <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-            <div><span style={{ color: C.gold, fontWeight: 800, fontSize: 20 }}>{nutritionPreview.cals}</span><span style={{ color: C.muted, fontSize: 12 }}> cal</span></div>
-            <div><span style={{ color: C.emerald, fontWeight: 800, fontSize: 20 }}>{nutritionPreview.protein}g</span><span style={{ color: C.muted, fontSize: 12 }}> protein</span></div>
-            <div><span style={{ color: C.text, fontWeight: 700, fontSize: 16 }}>{nutritionPreview.carbs}g</span><span style={{ color: C.muted, fontSize: 12 }}> carbs</span></div>
-            <div><span style={{ color: C.text, fontWeight: 700, fontSize: 16 }}>{nutritionPreview.fat}g</span><span style={{ color: C.muted, fontSize: 12 }}> fat</span></div>
-          </div>
-          <div style={{ color: C.muted, fontSize: 11, marginTop: 8 }}>~{nutritionPreview.lossRate} · maintenance ≈ {nutritionPreview.tdee} cal</div>
-        </div>
-      </div>,
-    },
-    {
-      title: "Training Style", sub: "How do you want to train each week? The coach organizes it all freely.",
-      fields: <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        <div>
-          <label style={S.label}>Run days per week</label>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{["3","4","5"].map(d => <button key={d} style={S.pill(form.runDaysPerWeek === d)} onClick={() => set("runDaysPerWeek", d)}>{d} runs</button>)}</div>
-        </div>
-        <div>
-          <label style={S.label}>Lift days per week (push/pull/legs/core)</label>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{["0","2","3","4"].map(d => <button key={d} style={S.pill(form.liftDaysPerWeek === d)} onClick={() => set("liftDaysPerWeek", d)}>{d === "0" ? "No lifting" : `${d} lifts`}</button>)}</div>
-        </div>
-        <div>
-          <label style={S.label}>Protected long run day</label>
-          <select style={S.select} value={form.longRunDay} onChange={e => set("longRunDay", e.target.value)}>{["Saturday","Sunday","Friday"].map(d => <option key={d}>{d}</option>)}</select>
-        </div>
-      </div>,
-    },
-    {
-      title: "Anything I should know?", sub: "Constraints, injuries, your schedule — the coach plans around it.",
-      fields: <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        <div><label style={S.label}>Experience level</label>
-          <select style={S.select} value={form.experience} onChange={e => set("experience", e.target.value)}>
-            <option value="beginner">Beginner — under 6 months</option>
-            <option value="intermediate">Intermediate — 6–18 months</option>
-            <option value="advanced">Advanced — 18+ months, raced before</option>
-          </select>
-        </div>
-        <div><label style={S.label}>Notes for your coach (optional)</label>
-          <textarea style={{ ...S.input, minHeight: 80, resize: "vertical" }} placeholder="e.g. I work overnight Sun–Thu, prefer Sunday rest, bad left knee, no gym on weekends..." value={form.trainingNotes} onChange={e => set("trainingNotes", e.target.value)} />
-        </div>
-        <div><label style={S.label}>Current shoe (optional)</label><input style={S.input} placeholder="Nike Pegasus 41" value={form.shoes} onChange={e => set("shoes", e.target.value)} /></div>
-      </div>,
-    },
-  ];
-
-  const canNext = () => {
-    if (step === 0) return form.name.trim();
-    if (step === 1) return form.goals.length > 0;
-    if (step === 3) return form.weightLbs && form.goalWeightLbs && form.heightIn;
-    return true;
-  };
-
-  async function generate() {
-    setLoading(true); setError("");
-    try {
-      const today = todayStr();
-      const weeks = form.raceDate ? Math.max(4, Math.min(40, Math.round((new Date(form.raceDate) - new Date(today)) / 86400000 / 7))) : 12;
-      const nutrition = computeNutrition({ weightLbs: parseFloat(form.weightLbs), goalWeightLbs: parseFloat(form.goalWeightLbs), heightIn: parseFloat(form.heightIn), age: parseFloat(form.age), sex: form.sex, dietMode: form.dietMode });
-
-      // Generate only first 4 weeks in detail to stay within token limits; rest generated on demand
-      const buildWeeks = Math.min(weeks, 2);
-      const raceGoal = form.goals.find(g => g.startsWith("Race"));
-      const wantsWeightLoss = form.goals.includes("Lose weight");
-      const goalsLine = form.goals.join(", ");
-      const prompt = `You are an elite running + strength coach. Build the FIRST ${buildWeeks} weeks of a ${weeks}-week plan.
-
-ATHLETE:
-- Name: ${form.name}, ${form.weightLbs}lbs → goal ${form.goalWeightLbs}lbs, ${form.heightIn}in, age ${form.age}
-- GOALS (all matter, balance them): ${goalsLine}${raceGoal && form.raceDate ? ` — target race ${raceGoal} on ${form.raceDate}` : ""}
-- Current 5K: ${form.fiveKTime || "unknown"}, Experience: ${form.experience}
-- Wants ${form.runDaysPerWeek} runs/week + ${form.liftDaysPerWeek} lift days/week (push/pull/legs/core)
-- Protected long run: ${form.longRunDay}
-- Daily nutrition target: ${nutrition.cals} cal, ${nutrition.protein}g protein (${form.dietMode} cut)
-- Coach notes: ${form.trainingNotes || "none"}
-
-COACHING RULES:
-- Balance multiple goals by PERIODIZING, don't ignore any: ${wantsWeightLoss && raceGoal ? "athlete wants BOTH weight loss AND to race — lean into easy/aerobic volume and the cut in early weeks (fat loss + base), then in the final 2-3 weeks shift toward race-specific sharpening and protect performance (less fatigue, taper into race day)." : wantsWeightLoss ? "prioritize sustainable aerobic volume and consistency to support the fat-loss deficit; keep most runs easy/Z2 so the athlete can recover in a calorie deficit." : "build fitness progressively toward the goal."}
-- Organize runs AND lifts intelligently. Never put a hard run the day after leg day. Easy runs can follow upper-body lifts. Protect the long run. Build real rest — especially important while cutting calories.
-- Keep most running easy (Z2) early; reserve hard intervals/tempo for when it serves the race goal.
-- Periodize: weeks progress (base → build${raceGoal ? " → peak → taper" : ""}). Week 1 starts conservative.
-- Each day is exactly one of: a run, a lift session, a combo, or rest.
-- Plan start date: ${today}
-
-Return ONLY valid JSON, no markdown:
-{
-  "planName": "string (reflects their combined goals)",
-  "totalWeeks": ${weeks},
-  "weeks": [
-    {
-      "weekNumber": 1, "theme": "string", "totalMiles": number, "focus": "string (1 sentence)",
-      "workouts": [
-        { "date": "YYYY-MM-DD", "type": "Easy Run|Tempo|Intervals|Long Run|Recovery Run|Push|Pull|Legs|Core|Upper Body|Rest|Cross Training",
-          "title": "string", "distance": number, "unit": "miles", "paceTarget": "string or N/A", "hrZone": "Z1|Z2|Z3|Z4|Z5|N/A",
-          "description": "string 1-2 sentences", "exercises": "string (for lifts: list key movements; for runs: null)",
-          "warmup": "string or null", "mainSet": "string or null", "cooldown": "string or null", "effort": "Easy|Moderate|Hard|Rest" }
-      ]
+// ── PLAN BUILDER (deterministic skeleton + AI detail) ──────────────────────────
+function buildSkeleton(startISO, numWeeks){
+  let cur=new Date(startISO+"T00:00:00");
+  while(cur.getDay()!==1) cur.setDate(cur.getDate()+1); // next Monday
+  const weeks=[];
+  for(let w=0;w<numWeeks;w++){
+    const workouts=[];
+    for(let d=0;d<7;d++){
+      const date=new Date(cur); date.setDate(date.getDate()+w*7+d);
+      const n=date.getDay();
+      workouts.push({date:iso(date),...TEMPLATE[n],distance:0,unit:"miles",paceTarget:"N/A",hrZone:"N/A",description:"",exercises:null,warmup:null,mainSet:null,cooldown:null});
     }
-  ]
-}`;
-
-      const raw = await callClaude("Return only valid JSON. No markdown. No commentary.", prompt, 8000);
-      const plan = extractJSON(raw);
-      plan.totalWeeks = weeks;
-
-      const profile = { ...form, startDate: today, createdAt: Date.now(), nutrition, totalWeeks: weeks, weightHistory: [{ date: today, weight: parseFloat(form.weightLbs) }] };
-      await save("trck_profile", profile);
-      await save("trck_plan", plan);
-      await save("trck_logs", []);
-      onDone(profile, plan, []);
-    } catch (e) {
-      setError("Failed to generate plan. Please try again."); console.error(e);
-    }
-    setLoading(false);
+    weeks.push({weekNumber:w+1,workouts});
   }
+  return weeks;
+}
+async function fillWeekDetail(week, weekNum, totalWeeks){
+  const zones=paceZones(PROFILE.current5k);
+  const prompt=`You are Francisco's elite coach. Fill in workout DETAIL for week ${weekNum} of a ${totalWeeks}-week plan (206→145lbs, sub-20 5K goal, currently 28:00).
 
-  const cur = steps[step];
-  return (
-    <div style={{ ...S.main, maxWidth: 480, paddingTop: 40 }}>
-      <div style={{ marginBottom: 28 }}>
-        <div style={{ display: "flex", gap: 6, marginBottom: 24 }}>{steps.map((_, i) => <div key={i} style={{ flex: 1, height: 3, borderRadius: 2, background: i <= step ? C.gold : C.border }} />)}</div>
-        <div style={{ color: C.muted, fontSize: 12, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>Step {step + 1} of {steps.length}</div>
-        <div style={S.h1}>{cur.title}</div>
-        <div style={{ color: C.muted, fontSize: 14, marginBottom: 24 }}>{cur.sub}</div>
-        {cur.fields}
-        {error && <div style={{ color: C.red, fontSize: 13, marginTop: 12 }}>{error}</div>}
-      </div>
-      <div style={{ display: "flex", gap: 10 }}>
-        {step > 0 && <button style={S.btnGhost} onClick={() => setStep(s => s - 1)}>Back</button>}
-        {step < steps.length - 1
-          ? <button style={{ ...S.btnGold, flex: 1, opacity: canNext() ? 1 : 0.4 }} onClick={() => canNext() && setStep(s => s + 1)}>Continue</button>
-          : <button style={{ ...S.btnGold, flex: 1 }} onClick={generate} disabled={loading}>{loading ? "Coach is building your plan..." : "Build My Plan →"}</button>}
-      </div>
-    </div>
-  );
+His paces right now:
+${Object.entries(zones).map(([k,v])=>`- ${k}: ${v}`).join("\n")}
+
+This week's fixed structure (DO NOT change days or types, only add detail):
+${week.workouts.map(w=>`- ${DAY_ABBR[dow(w.date)]}: ${w.type} (${w.title})`).join("\n")}
+
+Periodization: week ${weekNum}/${totalWeeks}. Early=base (easy volume), middle=build (speed), late=sharpen/taper.
+Keep most running EASY. Intervals/tempo use his exact paces above. Lifts need full sets×reps×rest×tempo.
+
+Return ONLY JSON, no markdown:
+{"workouts":[{"dow":1,"distance":number,"paceTarget":"string or N/A","hrZone":"Z1-Z5 or N/A","description":"1-2 sentences","exercises":"for lifts: 'Move — 4×6, rest 2-3min | Move2 — 3×8...' with | separators; runs: null","warmup":"runs only or null","mainSet":"concrete e.g. '6 × 800m @ 8:45/mi, 90s jog' or null","cooldown":"runs only or null"}]}
+Provide one entry per day (dow 0-6 matching the structure). For Rest day use zeros/nulls.`;
+  const raw=await callClaude("Return only valid JSON. No markdown.",prompt,4000);
+  const result=extractJSON(raw);
+  // merge detail into skeleton by dow
+  const byDow={}; (result.workouts||[]).forEach(d=>byDow[d.dow]=d);
+  week.workouts=week.workouts.map(w=>{
+    const d=byDow[dow(w.date)]; if(!d)return w;
+    return {...w,distance:d.distance??w.distance,paceTarget:d.paceTarget??w.paceTarget,hrZone:d.hrZone??w.hrZone,description:d.description||w.description,exercises:d.exercises??w.exercises,warmup:d.warmup??w.warmup,mainSet:d.mainSet??w.mainSet,cooldown:d.cooldown??w.cooldown};
+  });
+  // compute week mileage
+  week.totalMiles=Math.round(week.workouts.filter(w=>isRun(w.type)).reduce((s,w)=>s+(w.distance||0),0));
+  week.phase = weekNum<=10?"Base":weekNum<=20?"Build":"Sharpen";
+  return week;
 }
 
-// ── TODAY CARD ─────────────────────────────────────────────────────────────────
-function TodayCard({ workout, onLog, logs, setNotFeeling, notFeeling }) {
-  const [briefing, setBriefing] = useState("");
-  const [loadingBrief, setLoadingBrief] = useState(false);
-  const isLogged = logs.some(l => l.date === workout?.date);
+// ════════════════════════════════════════════════════════════════════════════
+//  UI COMPONENTS
+// ════════════════════════════════════════════════════════════════════════════
 
-  async function getBriefing() {
-    if (!workout || briefing) return;
-    setLoadingBrief(true);
-    const text = await callClaude("You are a motivational running + strength coach. Under 70 words. Direct, energetic, personal.",
-      `Pre-workout briefing for: ${workout.title} — ${workout.description}. ${workout.paceTarget !== "N/A" ? "Pace: " + workout.paceTarget : ""} Effort: ${workout.effort}. Make it motivating and specific.`);
-    setBriefing(text); setLoadingBrief(false);
-  }
-
-  if (!workout) return <div style={S.card}><div style={S.cardTitle}>Today</div><div style={{ color: C.muted }}>No workout scheduled today. Check your plan.</div></div>;
-  const color = typeColor(workout.type);
-  const run = isRun(workout.type);
-
+// ── TODAY CARD ────────────────────────────────────────────────────────────────
+function TodayCard({ workout, paces, onLog, logged, onOpen }) {
+  if(!workout) return <div style={S.card}><div style={S.ct}>Today</div><div style={{color:C.muted}}>No workout today.</div></div>;
+  const color=typeColor(workout.type), run=isRun(workout.type), rest=workout.type==="Rest";
   return (
-    <div style={{ ...S.card, borderColor: color + "44" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
-        <div><div style={S.cardTitle}>Today · {fmtDate(workout.date)}</div><div style={{ fontSize: 20, fontWeight: 800 }}>{workout.title}</div></div>
-        <div style={{ display: "flex", gap: 8, flexDirection: "column", alignItems: "flex-end" }}>
+    <div style={{...S.card, borderColor:color+"44"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+        <div><div style={S.ct}>Today · {fmtDate(workout.date)}</div><div style={{fontSize:22,fontWeight:800}}>{workout.title}</div></div>
+        <div style={{display:"flex",flexDirection:"column",gap:6,alignItems:"flex-end"}}>
           <span style={S.tag(color)}>{workout.type}</span>
-          {isLogged && <span style={S.tag(C.emerald)}>✓ DONE</span>}
+          {logged && <span style={S.tag(C.emerald)}>✓ DONE</span>}
         </div>
       </div>
-
-      {run && workout.type !== "Rest" && (
-        <div style={{ ...S.grid3, marginBottom: 14 }}>
-          <div style={{ background: C.surface2, borderRadius: 8, padding: "10px 12px" }}><div style={{ color: C.muted, fontSize: 10, fontWeight: 700 }}>DISTANCE</div><div style={{ fontWeight: 800, fontSize: 18, color: C.gold }}>{workout.distance}</div><div style={{ color: C.muted, fontSize: 11 }}>{workout.unit}</div></div>
-          <div style={{ background: C.surface2, borderRadius: 8, padding: "10px 12px" }}><div style={{ color: C.muted, fontSize: 10, fontWeight: 700 }}>PACE</div><div style={{ fontWeight: 700, fontSize: 13 }}>{workout.paceTarget}</div></div>
-          <div style={{ background: C.surface2, borderRadius: 8, padding: "10px 12px" }}><div style={{ color: C.muted, fontSize: 10, fontWeight: 700 }}>ZONE</div><div style={{ fontWeight: 800, fontSize: 18, color }}>{workout.hrZone}</div></div>
+      {run && !rest && (
+        <div style={{...S.grid3,marginBottom:14}}>
+          <div style={{background:C.surface2,borderRadius:8,padding:"10px 12px"}}><div style={{color:C.muted,fontSize:10,fontWeight:700}}>DISTANCE</div><div style={{fontWeight:800,fontSize:18,color:C.gold}}>{workout.distance||"—"}</div><div style={{color:C.muted,fontSize:11}}>{workout.unit}</div></div>
+          <div style={{background:C.surface2,borderRadius:8,padding:"10px 12px"}}><div style={{color:C.muted,fontSize:10,fontWeight:700}}>PACE</div><div style={{fontWeight:700,fontSize:12}}>{workout.paceTarget}</div></div>
+          <div style={{background:C.surface2,borderRadius:8,padding:"10px 12px"}}><div style={{color:C.muted,fontSize:10,fontWeight:700}}>ZONE</div><div style={{fontWeight:800,fontSize:18,color}}>{workout.hrZone}</div></div>
         </div>
       )}
-
-      {!run && workout.exercises && workout.type !== "Rest" && (
-        <div style={{ background: C.surface2, borderRadius: 8, padding: 14, marginBottom: 14 }}>
-          <div style={{ color: color, fontSize: 11, fontWeight: 700, marginBottom: 6 }}>SESSION</div>
-          <div style={{ fontSize: 14, lineHeight: 1.6 }}>{workout.exercises}</div>
+      {!run && !rest && workout.exercises && (
+        <div style={{background:C.surface2,borderRadius:8,padding:14,marginBottom:14}}>
+          <div style={{color,fontSize:11,fontWeight:700,marginBottom:6}}>THE SESSION</div>
+          <div style={{display:"flex",flexDirection:"column",gap:5}}>
+            {workout.exercises.split("|").map((e,i)=><div key={i} style={{fontSize:13,lineHeight:1.4}}>• {e.trim()}</div>)}
+          </div>
         </div>
       )}
-
-      {run && workout.type !== "Rest" && (
-        <div style={{ marginBottom: 14 }}>
-          {workout.warmup && <div style={{ marginBottom: 8 }}><div style={{ color: C.muted, fontSize: 11, fontWeight: 700 }}>WARM-UP</div><div style={{ fontSize: 13 }}>{workout.warmup}</div></div>}
-          {workout.mainSet && <div style={{ marginBottom: 8 }}><div style={{ color: C.gold, fontSize: 11, fontWeight: 700 }}>MAIN SET</div><div style={{ fontSize: 13 }}>{workout.mainSet}</div></div>}
-          {workout.cooldown && <div><div style={{ color: C.muted, fontSize: 11, fontWeight: 700 }}>COOL-DOWN</div><div style={{ fontSize: 13 }}>{workout.cooldown}</div></div>}
-        </div>
-      )}
-
-      <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.6, marginBottom: 14 }}>{workout.description}</div>
-      <div style={S.divider} />
-
-      {briefing
-        ? <div style={{ background: C.emerald + "11", border: `1px solid ${C.emerald}33`, borderRadius: 8, padding: 12, marginBottom: 14 }}><div style={{ color: C.emerald, fontSize: 11, fontWeight: 700, marginBottom: 4 }}>COACH BRIEFING</div><div style={{ fontSize: 13, lineHeight: 1.6 }}>{briefing}</div></div>
-        : workout.type !== "Rest" && <button style={{ ...S.btnGhost, marginBottom: 14, fontSize: 12 }} onClick={getBriefing} disabled={loadingBrief}>{loadingBrief ? "Loading..." : "⚡ Get Coach Briefing"}</button>}
-
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        {!isLogged && workout.type !== "Rest" && <button style={S.btnEmerald} onClick={() => onLog(workout)}>Log This Workout</button>}
-        {workout.type !== "Rest" && <button style={{ ...S.btnGhost, fontSize: 12 }} onClick={() => setNotFeeling(true)}>Not Feeling 100%?</button>}
-      </div>
-      {notFeeling && <NotFeeling100 workout={workout} onClose={() => setNotFeeling(false)} />}
-    </div>
-  );
-}
-
-// ── NOT FEELING 100% ───────────────────────────────────────────────────────────
-function NotFeeling100({ workout, onClose }) {
-  const [advice, setAdvice] = useState(""); const [loading, setLoading] = useState(false); const [selected, setSelected] = useState("");
-  const reasons = ["Feeling sick", "Minor ache/pain", "Super tired/fatigued", "Short on time", "Just not feeling it"];
-  async function getAdvice() {
-    if (!selected) return; setLoading(true);
-    const text = await callClaude("You are a running + strength coach. Concise, practical. Max 60 words.",
-      `Athlete isn't 100%: "${selected}". Scheduled: ${workout.title} (${workout.type}). Give a specific modified plan or clear guidance.`);
-    setAdvice(text); setLoading(false);
-  }
-  return (
-    <div style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginTop: 14 }}>
-      <div style={{ fontWeight: 700, marginBottom: 10 }}>Not Feeling 100%</div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>{reasons.map(r => <button key={r} style={{ ...S.btnGhost, textAlign: "left", padding: "8px 12px", borderColor: selected === r ? C.gold : C.border, color: selected === r ? C.gold : C.muted, fontSize: 13 }} onClick={() => setSelected(r)}>{r}</button>)}</div>
-      {advice ? <div style={{ background: C.emerald + "11", border: `1px solid ${C.emerald}33`, borderRadius: 8, padding: 12, fontSize: 13, lineHeight: 1.6, marginBottom: 10 }}>{advice}</div>
-        : <button style={{ ...S.btnGold, marginBottom: 10 }} onClick={getAdvice} disabled={!selected || loading}>{loading ? "Thinking..." : "Get Modified Plan"}</button>}
-      <button style={{ ...S.btnGhost, fontSize: 12 }} onClick={onClose}>Close</button>
-    </div>
-  );
-}
-
-// ── LOG MODAL ──────────────────────────────────────────────────────────────────
-function LogModal({ workout, onSave, onClose }) {
-  const run = isRun(workout?.type);
-  const [form, setForm] = useState({ distance: workout?.distance || "", time: "", notes: "", felt: "3" });
-  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "#000000CC", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: 24, width: "100%", maxWidth: 420 }}>
-        <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 4 }}>Log Workout</div>
-        <div style={{ color: C.muted, fontSize: 13, marginBottom: 20 }}>{workout?.title}</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          {run && <div style={S.grid2}>
-            <div><label style={S.label}>Distance (mi)</label><input style={S.input} type="number" step="0.1" value={form.distance} onChange={e => set("distance", e.target.value)} /></div>
-            <div><label style={S.label}>Time (mm:ss)</label><input style={S.input} placeholder="28:30" value={form.time} onChange={e => set("time", e.target.value)} /></div>
-          </div>}
-          <div><label style={S.label}>How did it feel? ({["😴","😓","😐","😊","🔥"][parseInt(form.felt)-1]})</label><input type="range" min="1" max="5" value={form.felt} onChange={e => set("felt", e.target.value)} style={{ width: "100%", accentColor: C.gold }} /></div>
-          <div><label style={S.label}>Notes</label><textarea style={{ ...S.input, minHeight: 70, resize: "vertical" }} placeholder="How'd it go?" value={form.notes} onChange={e => set("notes", e.target.value)} /></div>
-        </div>
-        <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
-          <button style={S.btnGhost} onClick={onClose}>Cancel</button>
-          <button style={{ ...S.btnEmerald, flex: 1 }} onClick={() => { onSave({ date: workout.date, workoutTitle: workout.title, workoutType: workout.type, distance: run ? (parseFloat(form.distance) || 0) : 0, time: form.time, notes: form.notes, felt: parseInt(form.felt), loggedAt: Date.now() }); onClose(); }}>Save ✓</button>
-        </div>
+      {workout.mainSet && <div style={{background:C.gold+"11",border:`1px solid ${C.gold}33`,borderRadius:8,padding:12,marginBottom:12,fontSize:13}}><b style={{color:C.gold}}>Main Set:</b> {workout.mainSet}</div>}
+      {workout.description && <div style={{fontSize:13,color:C.muted,lineHeight:1.6,marginBottom:14}}>{workout.description}</div>}
+      <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+        {!rest && !logged && <button style={S.btnEmerald} onClick={()=>onLog(workout)}>Log Workout</button>}
+        <button style={{...S.btnGhost,fontSize:12}} onClick={()=>onOpen(workout)}>View / Edit</button>
       </div>
     </div>
   );
 }
 
-// ── WEEK CALENDAR ──────────────────────────────────────────────────────────────
-function WeekCalendar({ plan, logs, currentWeek, setCurrentWeek, onSelectWorkout, onExtendPlan, extending, onSwap }) {
-  const [rearrange, setRearrange] = useState(false);
-  const [picked, setPicked] = useState(null); // index of workout picked up
-  if (!plan) return null;
-  const week = plan.weeks[currentWeek];
-  const today = todayStr();
-  const needsMore = currentWeek === plan.weeks.length - 1 && plan.weeks.length < plan.totalWeeks;
-
-  if (!week) return (
-    <div style={S.card}>
-      <div style={{ textAlign: "center", padding: 20 }}>
-        <div style={{ color: C.muted, marginBottom: 14 }}>Week {currentWeek + 1} isn't built yet.</div>
-        <button style={S.btnGold} onClick={onExtendPlan} disabled={extending}>{extending ? "Coach is building..." : "Build Next Weeks →"}</button>
-      </div>
-    </div>
-  );
-
-  function handleTap(i) {
-    if (!rearrange) { onSelectWorkout(week.workouts[i]); return; }
-    if (picked === null) { setPicked(i); return; }
-    if (picked === i) { setPicked(null); return; } // tap same to cancel
-    onSwap(currentWeek, picked, i);
-    setPicked(null);
-  }
-
-  function exitRearrange() { setRearrange(false); setPicked(null); }
-
+// ── FUEL CARD ─────────────────────────────────────────────────────────────────
+function FuelCard({ isRefeed }) {
+  const cals=isRefeed?PROFILE.refeedCalories:PROFILE.calories;
+  const carbs=isRefeed?Math.round((cals-PROFILE.protein*4-50*9)/4):Math.round((cals-PROFILE.protein*4-50*9)/4);
   return (
     <div style={S.card}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-        <div>
-          <div style={S.cardTitle}>Week {week.weekNumber} of {plan.totalWeeks} — {week.theme}</div>
-          <div style={{ color: C.muted, fontSize: 12 }}>{week.totalMiles} mi running{week.focus ? ` · ${week.focus}` : ""}</div>
-        </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          {!rearrange && <><button style={{ ...S.btnGhost, padding: "6px 12px" }} onClick={() => setCurrentWeek(w => Math.max(0, w - 1))} disabled={currentWeek === 0}>‹</button>
-          <button style={{ ...S.btnGhost, padding: "6px 12px" }} onClick={() => setCurrentWeek(w => Math.min(plan.totalWeeks - 1, w + 1))} disabled={currentWeek === plan.totalWeeks - 1}>›</button></>}
-        </div>
+      <div style={S.ct}>Today's Fuel {isRefeed && <span style={{color:C.emerald}}>· 🍚 REFEED</span>}</div>
+      <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+        <div style={{flex:1,minWidth:80,background:C.surface2,borderRadius:8,padding:12}}><div style={{color:C.gold,fontWeight:800,fontSize:20}}>{cals.toLocaleString()}</div><div style={{color:C.muted,fontSize:11}}>calories</div></div>
+        <div style={{flex:1,minWidth:80,background:C.surface2,borderRadius:8,padding:12}}><div style={{color:C.emerald,fontWeight:800,fontSize:20}}>{PROFILE.protein}g</div><div style={{color:C.muted,fontSize:11}}>protein</div></div>
+        <div style={{flex:1,minWidth:80,background:C.surface2,borderRadius:8,padding:12}}><div style={{fontWeight:800,fontSize:20}}>~{Math.max(carbs,0)}g</div><div style={{color:C.muted,fontSize:11}}>carbs</div></div>
+        <div style={{flex:1,minWidth:80,background:C.surface2,borderRadius:8,padding:12}}><div style={{fontWeight:800,fontSize:20}}>~50g</div><div style={{color:C.muted,fontSize:11}}>fat</div></div>
       </div>
+      {isRefeed && <div style={{color:C.muted,fontSize:11,marginTop:10,lineHeight:1.5}}>Carbs up, protein steady, fat low. Fuels your long run + legs, protects testosterone & leptin. Clean carbs — not a cheat day.</div>}
+    </div>
+  );
+}
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        {rearrange
-          ? <div style={{ color: picked === null ? C.gold : C.emerald, fontSize: 12, fontWeight: 600 }}>{picked === null ? "Tap a workout to move it" : "Now tap where it should go"}</div>
-          : <div style={{ color: C.muted, fontSize: 11 }}>Tap a day for details</div>}
-        <button style={{ ...(rearrange ? S.btnEmerald : S.btnGhost), padding: "6px 14px", fontSize: 12 }} onClick={() => rearrange ? exitRearrange() : setRearrange(true)}>
-          {rearrange ? "Done" : "⇅ Rearrange"}
-        </button>
+// ── WEIGH-IN / GOAL DATE ──────────────────────────────────────────────────────
+function GoalDateCard({ history }) {
+  const proj=projectGoalDate(history);
+  const avg=weeklyAverage(history);
+  const start=PROFILE.startWeight, goal=PROFILE.goalWeight;
+  const cur=history&&history.length?history[history.length-1].weight:start;
+  const pct=Math.min(Math.max((start-cur)/(start-goal),0),1);
+  return (
+    <div style={{...S.card,borderColor:C.emerald+"44"}}>
+      <div style={S.ct}>On Track To Goal</div>
+      {proj&&proj.date&&proj.weeksLeft!==0 ? (
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+          <div><div style={{fontSize:26,fontWeight:800,color:C.emerald}}>{proj.date}</div><div style={{color:C.muted,fontSize:12}}>Est. 145 lbs · from your real trend</div></div>
+          <div style={{textAlign:"right"}}><div style={{fontWeight:800,fontSize:16}}>~{Math.round(proj.weeksLeft)} wks</div><div style={{color:C.muted,fontSize:11}}>{proj.rate.toFixed(1)} lb/wk</div></div>
+        </div>
+      ) : (
+        <div style={{color:C.muted,fontSize:14,marginBottom:8}}>{proj?.note || "Log your weight on Wed & Sat to see your estimated goal date."}</div>
+      )}
+      <div style={{background:C.surface2,borderRadius:6,height:8,overflow:"hidden",marginBottom:8}}><div style={{background:C.emerald,height:"100%",width:`${pct*100}%`}}/></div>
+      <div style={{display:"flex",justifyContent:"space-between",fontSize:12}}>
+        <span style={{color:C.muted}}>{start} start</span>
+        {avg && <span style={{color:C.gold,fontWeight:700}}>{avg.toFixed(1)} avg now</span>}
+        <span style={{color:C.muted}}>{goal} goal</span>
       </div>
+    </div>
+  );
+}
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {week.workouts.map((w, i) => {
-          const isToday = w.date === today, isDone = logs.some(l => l.date === w.date), color = typeColor(w.type);
-          const isPicked = picked === i;
-          const isTarget = rearrange && picked !== null && picked !== i;
+function WeighInCard({ history, onLog }) {
+  const [val,setVal]=useState("");
+  const today=todayStr(), isWeighDay=PROFILE.weighDays.includes(new Date().getDay());
+  const loggedToday=history?.some(h=>h.date===today);
+  return (
+    <div style={S.card}>
+      <div style={S.ct}>Weigh-In {isWeighDay && <span style={{color:C.gold}}>· today is a weigh day ⚖️</span>}</div>
+      {loggedToday ? (
+        <div style={{color:C.emerald,fontSize:14,marginBottom:10}}>✓ Logged today: {history[history.length-1].weight} lbs</div>
+      ) : (
+        <div style={{display:"flex",gap:10,marginBottom:10}}>
+          <input style={{...S.input,flex:1}} type="number" step="0.1" placeholder="Weight (lbs)" value={val} onChange={e=>setVal(e.target.value)} />
+          <button style={S.btnEmerald} onClick={()=>{if(val){onLog(parseFloat(val));setVal("");}}}>Log</button>
+        </div>
+      )}
+      <div style={{color:C.muted,fontSize:11,lineHeight:1.5}}>Weigh first thing — after bathroom, before eating. Days: <b>Wed + Sat</b>. We track the weekly average, not daily bounces.</div>
+    </div>
+  );
+}
+
+// ── ARC OVERVIEW ──────────────────────────────────────────────────────────────
+function ArcOverview({ plan, currentWeekNum }) {
+  return (
+    <div style={S.card}>
+      <div style={S.ct}>The Arc · {plan.totalWeeks}-Week Journey</div>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        {PHASES.map(p=>{
+          const active=(p.name==="Base"&&currentWeekNum<=10)||(p.name==="Build"&&currentWeekNum>10&&currentWeekNum<=20)||(p.name==="Sharpen"&&currentWeekNum>20);
           return (
-            <button key={i} onClick={() => handleTap(i)} style={{
-              background: isPicked ? C.gold + "33" : isToday ? color + "18" : C.surface2,
-              border: `1px solid ${isPicked ? C.gold : isTarget ? C.emerald + "66" : isToday ? color : isDone ? C.emerald + "44" : C.border}`,
-              borderStyle: isTarget ? "dashed" : "solid",
-              borderRadius: 8, padding: "10px 14px", display: "flex", alignItems: "center", gap: 12,
-              cursor: "pointer", textAlign: "left", fontFamily: FONT,
-              transform: isPicked ? "scale(0.98)" : "none", transition: "transform 0.1s",
-            }}>
-              {rearrange && <span style={{ color: isPicked ? C.gold : C.muted, fontSize: 16, flexShrink: 0 }}>⇅</span>}
-              <div style={{ width: 42, color: isToday ? color : C.muted, fontSize: 12, fontWeight: 700, flexShrink: 0 }}>{fmtDate(w.date).split(" ")[0].toUpperCase()}</div>
-              <div style={{ flex: 1 }}>
-                <div style={{ color: C.text, fontWeight: 600, fontSize: 13 }}>{w.title}</div>
-                <div style={{ color: C.muted, fontSize: 11 }}>{isRun(w.type) && w.type !== "Rest" ? `${w.distance} mi · ${w.paceTarget}` : w.type === "Rest" ? "Rest Day" : w.type}</div>
-              </div>
-              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>{isDone && !rearrange && <span style={{ color: C.emerald, fontSize: 14 }}>✓</span>}<span style={S.tag(color)}>{w.effort}</span></div>
-            </button>
-          );
-        })}
-      </div>
-
-      {rearrange && <div style={{ color: C.muted, fontSize: 11, marginTop: 10, lineHeight: 1.5 }}>Moving a workout swaps it with the day you tap, so your week stays in order. Heads up: stacking two hard days back-to-back isn't ideal for recovery.</div>}
-      {!rearrange && needsMore && <button style={{ ...S.btnGold, marginTop: 14, width: "100%" }} onClick={onExtendPlan} disabled={extending}>{extending ? "Coach is building next block..." : "Build Next 2 Weeks →"}</button>}
-    </div>
-  );
-}
-
-// ── NUTRITION CARD ─────────────────────────────────────────────────────────────
-function NutritionCard({ profile }) {
-  const n = profile.nutrition;
-  if (!n) return null;
-  return (
-    <div style={S.card}>
-      <div style={S.cardTitle}>Daily Nutrition Target</div>
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
-        <div style={{ flex: 1, minWidth: 80, background: C.surface2, borderRadius: 8, padding: 12 }}><div style={{ color: C.gold, fontWeight: 800, fontSize: 22 }}>{n.cals}</div><div style={{ color: C.muted, fontSize: 11 }}>calories</div></div>
-        <div style={{ flex: 1, minWidth: 80, background: C.surface2, borderRadius: 8, padding: 12 }}><div style={{ color: C.emerald, fontWeight: 800, fontSize: 22 }}>{n.protein}g</div><div style={{ color: C.muted, fontSize: 11 }}>protein</div></div>
-        <div style={{ flex: 1, minWidth: 80, background: C.surface2, borderRadius: 8, padding: 12 }}><div style={{ fontWeight: 800, fontSize: 22 }}>{n.carbs}g</div><div style={{ color: C.muted, fontSize: 11 }}>carbs</div></div>
-        <div style={{ flex: 1, minWidth: 80, background: C.surface2, borderRadius: 8, padding: 12 }}><div style={{ fontWeight: 800, fontSize: 22 }}>{n.fat}g</div><div style={{ color: C.muted, fontSize: 11 }}>fat</div></div>
-      </div>
-      <div style={{ color: C.muted, fontSize: 12 }}>{profile.dietMode[0].toUpperCase() + profile.dietMode.slice(1)} · ~{n.lossRate} · maintenance ≈ {n.tdee} cal/day</div>
-    </div>
-  );
-}
-
-// ── WEIGHT TRACKER ─────────────────────────────────────────────────────────────
-function WeightTracker({ profile, onLogWeight }) {
-  const [val, setVal] = useState("");
-  const hist = profile.weightHistory || [];
-  const current = hist.length ? hist[hist.length - 1].weight : parseFloat(profile.weightLbs);
-  const start = parseFloat(profile.weightLbs);
-  const goal = parseFloat(profile.goalWeightLbs);
-  const lost = (start - current).toFixed(1);
-  const toGo = (current - goal).toFixed(1);
-  const pct = Math.min(Math.max((start - current) / (start - goal), 0), 1);
-  return (
-    <div style={S.card}>
-      <div style={S.cardTitle}>Weight Progress</div>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-        <div><span style={{ fontSize: 26, fontWeight: 800, color: C.gold }}>{current}</span><span style={{ color: C.muted, fontSize: 13 }}> lbs</span></div>
-        <div style={{ textAlign: "right" }}><div style={{ color: C.emerald, fontWeight: 700, fontSize: 13 }}>−{lost} lbs lost</div><div style={{ color: C.muted, fontSize: 12 }}>{toGo} to go → {goal}</div></div>
-      </div>
-      <div style={{ background: C.surface2, borderRadius: 4, height: 8, overflow: "hidden", marginBottom: 12 }}><div style={{ background: C.emerald, height: "100%", width: `${pct * 100}%`, borderRadius: 4 }} /></div>
-      <div style={{ display: "flex", gap: 10 }}>
-        <input style={{ ...S.input, flex: 1 }} type="number" step="0.1" placeholder="Log today's weight" value={val} onChange={e => setVal(e.target.value)} />
-        <button style={S.btnEmerald} onClick={() => { if (val) { onLogWeight(parseFloat(val)); setVal(""); } }}>Log</button>
-      </div>
-    </div>
-  );
-}
-
-// ── MILEAGE GRAPH ──────────────────────────────────────────────────────────────
-function MileageGraph({ plan, logs }) {
-  if (!plan) return null;
-  const built = plan.weeks;
-  const maxMiles = Math.max(...built.map(w => w.totalMiles), 1);
-  return (
-    <div style={S.card}>
-      <div style={S.cardTitle}>Weekly Mileage</div>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 80 }}>
-        {built.map((w, i) => {
-          const logged = logs.filter(l => w.workouts.some(wk => wk.date === l.date)).reduce((s, l) => s + l.distance, 0);
-          const pct = w.totalMiles / maxMiles, lPct = Math.min(logged / maxMiles, 1);
-          return (
-            <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
-              <div style={{ width: "100%", position: "relative", height: 60, display: "flex", alignItems: "flex-end" }}>
-                <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, background: C.border, borderRadius: "4px 4px 0 0", height: `${pct * 100}%` }} />
-                {lPct > 0 && <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, background: C.emerald, borderRadius: "4px 4px 0 0", height: `${lPct * 100}%` }} />}
-              </div>
-              <div style={{ fontSize: 9, color: C.muted }}>{w.weekNumber}</div>
+            <div key={p.name} style={{flex:1,minWidth:110,background:active?p.color+"18":C.surface2,border:`1px solid ${active?p.color:C.border}`,borderRadius:10,padding:12}}>
+              <div style={{fontWeight:800,fontSize:14,color:active?p.color:C.text}}>{p.name}{active?" ●":""}</div>
+              <div style={{color:C.muted,fontSize:11,marginTop:2}}>Weeks {p.weeks}</div>
+              <div style={{fontSize:11,marginTop:6,lineHeight:1.4,color:C.muted}}>{p.desc}</div>
             </div>
           );
         })}
       </div>
-      <div style={{ display: "flex", gap: 16, marginTop: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}><div style={{ width: 10, height: 10, background: C.border, borderRadius: 2 }} /><span style={{ fontSize: 11, color: C.muted }}>Planned</span></div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}><div style={{ width: 10, height: 10, background: C.emerald, borderRadius: 2 }} /><span style={{ fontSize: 11, color: C.muted }}>Logged</span></div>
+      <div style={{color:C.muted,fontSize:11,marginTop:12,lineHeight:1.5}}>You see the whole map. Detailed weeks build out as you go — shaped by your real progress, not a guess from day one.</div>
+    </div>
+  );
+}
+
+// ── WEEK CALENDAR (with rearrange) ────────────────────────────────────────────
+function WeekCalendar({ plan, logs, weekIdx, setWeekIdx, onSelect, onSwap, onExtend, extending }) {
+  const [rearrange,setRearrange]=useState(false);
+  const [picked,setPicked]=useState(null);
+  const week=plan.weeks[weekIdx];
+  const needsMore=weekIdx===plan.weeks.length-1 && plan.weeks.length<plan.totalWeeks;
+  if(!week) return (
+    <div style={S.card}><div style={{textAlign:"center",padding:20}}>
+      <div style={{color:C.muted,marginBottom:14}}>Week {weekIdx+1} isn't built yet.</div>
+      <button style={S.btnGold} onClick={onExtend} disabled={extending}>{extending?"Coach is building…":"Build Next Weeks →"}</button>
+    </div></div>
+  );
+  function tap(i){
+    if(!rearrange){onSelect(week.workouts[i]);return;}
+    if(picked===null){setPicked(i);return;}
+    if(picked===i){setPicked(null);return;}
+    onSwap(weekIdx,picked,i); setPicked(null);
+  }
+  return (
+    <div style={S.card}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+        <div>
+          <div style={S.ct}>Week {week.weekNumber} of {plan.totalWeeks} · {week.phase||"Base"}</div>
+          <div style={{color:C.muted,fontSize:12}}>{week.totalMiles||0} mi running this week</div>
+        </div>
+        {!rearrange && <div style={{display:"flex",gap:8}}>
+          <button style={{...S.btnGhost,padding:"6px 12px"}} onClick={()=>setWeekIdx(w=>Math.max(0,w-1))} disabled={weekIdx===0}>‹</button>
+          <button style={{...S.btnGhost,padding:"6px 12px"}} onClick={()=>setWeekIdx(w=>Math.min(plan.totalWeeks-1,w+1))} disabled={weekIdx===plan.totalWeeks-1}>›</button>
+        </div>}
+      </div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+        {rearrange ? <div style={{color:picked===null?C.gold:C.emerald,fontSize:12,fontWeight:600}}>{picked===null?"Tap a workout to move":"Now tap where it goes"}</div>
+          : <div style={{color:C.muted,fontSize:11}}>Tap a day for detail</div>}
+        <button style={{...(rearrange?S.btnEmerald:S.btnGhost),padding:"6px 14px",fontSize:12}} onClick={()=>{setRearrange(r=>!r);setPicked(null);}}>{rearrange?"Done":"⇅ Rearrange"}</button>
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:6}}>
+        {week.workouts.map((w,i)=>{
+          const isToday=w.date===todayStr(), done=logs.some(l=>l.date===w.date), color=typeColor(w.type);
+          const picked_=picked===i, target=rearrange&&picked!==null&&picked!==i;
+          const weigh=PROFILE.weighDays.includes(dow(w.date)), refeed=dow(w.date)===PROFILE.refeedDay;
+          return (
+            <button key={i} onClick={()=>tap(i)} style={{background:picked_?C.gold+"33":isToday?color+"18":C.surface2,border:`1px solid ${picked_?C.gold:target?C.emerald+"66":isToday?color:done?C.emerald+"44":C.border}`,borderStyle:target?"dashed":"solid",borderRadius:8,padding:"10px 12px",display:"flex",alignItems:"center",gap:10,cursor:"pointer",textAlign:"left",fontFamily:FONT}}>
+              {rearrange && <span style={{color:picked_?C.gold:C.muted,fontSize:16}}>⇅</span>}
+              <div style={{width:38,color:isToday?color:C.muted,fontSize:12,fontWeight:700,flexShrink:0}}>{DAY_ABBR[dow(w.date)].toUpperCase()}</div>
+              <div style={{flex:1}}>
+                <div style={{color:C.text,fontWeight:600,fontSize:13}}>{w.title}</div>
+                <div style={{color:C.muted,fontSize:11}}>{isRun(w.type)&&w.type!=="Rest"?`${w.distance||"?"} mi · ${w.paceTarget}`:w.type==="Rest"?"Rest Day":w.type}</div>
+              </div>
+              <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                {weigh && !rearrange && <span title="weigh-in" style={{fontSize:12}}>⚖️</span>}
+                {refeed && !rearrange && <span title="refeed" style={{fontSize:12}}>🍚</span>}
+                {done && !rearrange && <span style={{color:C.emerald,fontSize:14}}>✓</span>}
+                <span style={S.tag(color)}>{w.effort}</span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      {rearrange && <div style={{color:C.muted,fontSize:11,marginTop:10,lineHeight:1.5}}>Swaps the two sessions so the week stays in order. Heads up: avoid stacking two hard days back-to-back.</div>}
+      {!rearrange && needsMore && <button style={{...S.btnGold,marginTop:14,width:"100%"}} onClick={onExtend} disabled={extending}>{extending?"Coach is building next block…":"Build Next 2 Weeks →"}</button>}
+    </div>
+  );
+}
+
+// ── PACES SCREEN ──────────────────────────────────────────────────────────────
+function PacesScreen({ customPaces, onSave }) {
+  const auto=paceZones(PROFILE.current5k);
+  const live=customPaces||auto;
+  const [editing,setEditing]=useState(false);
+  const [draft,setDraft]=useState(live);
+  const info={Recovery:"Super easy. Flush legs.",Easy:"Conversational. Most miles.",Long:"Steady aerobic base.",Marathon:"Sustained effort.",Tempo:"Comfortably hard.",Threshold:"Hard but repeatable.",Interval:"VO2max. Short reps.","5K Race":"Goal race pace."};
+  return (
+    <div style={S.card}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+        <div style={S.ct}>Training Paces · @ {PROFILE.current5k} 5K</div>
+        <button style={{...(editing?S.btnEmerald:S.btnGhost),padding:"6px 14px",fontSize:12}} onClick={()=>{if(editing)onSave(draft);else setDraft(live);setEditing(e=>!e);}}>{editing?"Save":"Edit"}</button>
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+        {Object.entries(live).map(([z,v])=>(
+          <div key={z} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",background:C.surface2,borderRadius:8}}>
+            <div style={{flex:1}}><div style={{fontWeight:700,fontSize:14}}>{z}</div><div style={{color:C.muted,fontSize:11}}>{info[z]}</div></div>
+            {editing?<input style={{...S.input,width:140,padding:"6px 10px",fontSize:13}} value={draft[z]||""} onChange={e=>setDraft(d=>({...d,[z]:e.target.value}))}/>:<div style={{fontWeight:700,color:C.gold,fontSize:14}}>{v}</div>}
+          </div>
+        ))}
+      </div>
+      <div style={{color:C.muted,fontSize:11,marginTop:12,lineHeight:1.5}}>Goal: sub-20 5K ({secToPace(computePaces(PROFILE.goal5k).racePace5k)}/mi). These tighten toward it as you lean out — every pound makes you faster.</div>
+      {customPaces && <button style={{...S.btnGhost,marginTop:10,fontSize:12}} onClick={()=>onSave(null)}>Reset to auto</button>}
+    </div>
+  );
+}
+
+// ── PROGRESS PHOTOS ───────────────────────────────────────────────────────────
+function PhotosCard({ lastPhoto, onMark }) {
+  const next=lastPhoto?addDays(lastPhoto,30):todayStr();
+  const due=todayStr()>=next;
+  return (
+    <div style={S.card}>
+      <div style={S.ct}>Progress Photos</div>
+      <div style={{display:"flex",alignItems:"center",gap:14}}>
+        <div style={{fontSize:28}}>📸</div>
+        <div style={{flex:1}}>
+          <div style={{fontWeight:700,fontSize:14}}>{due?"Due now — take today's photos":`Next: ${fmtDate(next)}`}</div>
+          <div style={{color:C.muted,fontSize:11,marginTop:2}}>Your goal's visual. Scale lies, photos don't. Same lighting & time, front/side/back.</div>
+        </div>
+        <button style={{...(due?S.btnGold:S.btnGhost),padding:"8px 14px",fontSize:12}} onClick={()=>onMark(todayStr())}>{due?"Mark Done":"Done early"}</button>
       </div>
     </div>
   );
 }
 
-// ── RACE CALC ──────────────────────────────────────────────────────────────────
-function RaceCalc() {
-  const [fiveK, setFiveK] = useState(""); const [result, setResult] = useState(null);
-  function calc() {
-    const p = fiveK.split(":").map(Number);
-    if (p.length !== 2 || isNaN(p[0]) || isNaN(p[1])) return;
-    const secs = p[0] * 60 + p[1];
-    const fmt = s => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
-    setResult({ "1 Mile": fmt(secs / 3.1 * 0.92), "5K": fiveK, "10K": fmt(secs * 2.09), "Half Marathon": fmt(secs * 4.667), "Marathon": fmt(secs * 9.7) });
+// ── SUNDAY CHECK-IN ───────────────────────────────────────────────────────────
+function CheckInCard({ plan, logs, weightHistory }) {
+  const [report,setReport]=useState(null);
+  const [loading,setLoading]=useState(false);
+  async function run(){
+    setLoading(true);
+    // gather last 7 days facts
+    const weekAgo=addDays(todayStr(),-7);
+    const recentLogs=logs.filter(l=>l.date>=weekAgo);
+    const recentRuns=recentLogs.filter(l=>isRun(l.workoutType));
+    const avgFelt=recentLogs.length?(recentLogs.reduce((s,l)=>s+(l.felt||3),0)/recentLogs.length).toFixed(1):"n/a";
+    const wRecent=weightHistory.filter(h=>h.date>=weekAgo);
+    const wLost=wRecent.length>=2?(wRecent[0].weight-wRecent[wRecent.length-1].weight).toFixed(1):"n/a";
+    const planned=plan.weeks.flatMap(w=>w.workouts).filter(w=>w.date>=weekAgo&&w.date<=todayStr()&&w.type!=="Rest").length;
+    const prompt=`You are Francisco's honest, direct running+strength coach. Give a Sunday check-in. Be real, call out problems, no empty praise. Under 110 words.
+
+THIS WEEK:
+- Weight change: ${wLost} lbs (target ~2/wk; too fast=muscle risk, too slow=deficit slipping)
+- Workouts logged: ${recentLogs.length} of ${planned} planned (${recentRuns.length} runs)
+- Avg how-it-felt: ${avgFelt}/5
+- Goal: 206→145, sub-20 5K
+
+Flag honestly: weight trend on track or not, missed sessions, anything concerning. End with one specific focus for next week. Talk directly to him.`;
+    try{ setReport(await callClaude("You are a direct, honest coach. No empty praise.",prompt,500)); }
+    catch(e){ setReport("Couldn't generate check-in right now. Try again in a sec."); }
+    setLoading(false);
   }
   return (
     <div style={S.card}>
-      <div style={S.cardTitle}>Race Time Predictor</div>
-      <div style={{ display: "flex", gap: 10, marginBottom: 14 }}><input style={{ ...S.input, flex: 1 }} placeholder="5K time (28:00)" value={fiveK} onChange={e => setFiveK(e.target.value)} /><button style={S.btnGold} onClick={calc}>Predict</button></div>
-      {result && <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{Object.entries(result).map(([d, t]) => <div key={d} style={{ display: "flex", justifyContent: "space-between", padding: "8px 12px", background: C.surface2, borderRadius: 6 }}><span style={{ color: C.muted, fontSize: 13 }}>{d}</span><span style={{ fontWeight: 700, color: C.gold }}>{t}</span></div>)}</div>}
+      <div style={S.ct}>Sunday Coach Check-In · honest</div>
+      {report ? (
+        <div style={{fontSize:13,lineHeight:1.7,whiteSpace:"pre-wrap"}}>{report}</div>
+      ) : (
+        <div style={{color:C.muted,fontSize:13,marginBottom:12,lineHeight:1.5}}>Your weekly truth-teller. Flags junk paces, skipped lifts, losing too fast or slow. No gold stars for nothing.</div>
+      )}
+      <button style={{...S.btnGold,marginTop:12}} onClick={run} disabled={loading}>{loading?"Coach is reviewing…":report?"Refresh Check-In":"Run This Week's Check-In"}</button>
     </div>
   );
 }
 
-// ── SHOE TRACKER ───────────────────────────────────────────────────────────────
-function ShoeTracker({ profile, logs }) {
-  const total = logs.reduce((s, l) => s + (l.distance || 0), 0), limit = 500, pct = Math.min(total / limit, 1);
+// ── LOG MODAL ─────────────────────────────────────────────────────────────────
+function LogModal({ workout, onSave, onClose }) {
+  const run=isRun(workout?.type);
+  const [f,setF]=useState({distance:workout?.distance||"",time:"",notes:"",felt:"3"});
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
   return (
-    <div style={S.card}>
-      <div style={S.cardTitle}>Shoe Tracker</div>
-      <div style={{ fontWeight: 700, marginBottom: 6 }}>{profile?.shoes || "No shoe added"}</div>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}><span style={{ color: C.muted, fontSize: 13 }}>{total.toFixed(1)} mi logged</span><span style={{ color: pct > 0.8 ? C.red : C.muted, fontSize: 13, fontWeight: 700 }}>{limit - total < 0 ? "Replace now!" : `${(limit - total).toFixed(0)} mi left`}</span></div>
-      <div style={{ background: C.surface2, borderRadius: 4, height: 6, overflow: "hidden" }}><div style={{ background: pct > 0.8 ? C.red : C.gold, height: "100%", width: `${pct * 100}%`, borderRadius: 4 }} /></div>
+    <div style={{position:"fixed",inset:0,background:"#000000CC",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:24,width:"100%",maxWidth:420}}>
+        <div style={{fontWeight:800,fontSize:18,marginBottom:4}}>Log Workout</div>
+        <div style={{color:C.muted,fontSize:13,marginBottom:20}}>{workout?.title}</div>
+        <div style={{display:"flex",flexDirection:"column",gap:14}}>
+          {run&&<div style={S.grid2}>
+            <div><label style={S.label}>Distance (mi)</label><input style={S.input} type="number" step="0.1" value={f.distance} onChange={e=>set("distance",e.target.value)}/></div>
+            <div><label style={S.label}>Time (mm:ss)</label><input style={S.input} placeholder="28:30" value={f.time} onChange={e=>set("time",e.target.value)}/></div>
+          </div>}
+          <div><label style={S.label}>How did it feel? ({["😴","😓","😐","😊","🔥"][parseInt(f.felt)-1]})</label><input type="range" min="1" max="5" value={f.felt} onChange={e=>set("felt",e.target.value)} style={{width:"100%",accentColor:C.gold}}/></div>
+          <div><label style={S.label}>Notes</label><textarea style={{...S.input,minHeight:70,resize:"vertical"}} value={f.notes} onChange={e=>set("notes",e.target.value)}/></div>
+        </div>
+        <div style={{display:"flex",gap:10,marginTop:20}}>
+          <button style={S.btnGhost} onClick={onClose}>Cancel</button>
+          <button style={{...S.btnEmerald,flex:1}} onClick={()=>{onSave({date:workout.date,workoutTitle:workout.title,workoutType:workout.type,distance:run?(parseFloat(f.distance)||0):0,time:f.time,notes:f.notes,felt:parseInt(f.felt),loggedAt:Date.now()});onClose();}}>Save ✓</button>
+        </div>
+      </div>
     </div>
   );
 }
 
-// ── LOG HISTORY ────────────────────────────────────────────────────────────────
-function LogHistory({ logs }) {
-  if (!logs.length) return <div style={S.card}><div style={S.cardTitle}>History</div><div style={{ color: C.muted, fontSize: 13 }}>No workouts logged yet.</div></div>;
+// ── WORKOUT DETAIL + EDIT MODAL ───────────────────────────────────────────────
+function WorkoutModal({ workout, onClose, onLog, onSaveEdit, logged }) {
+  const [editing,setEditing]=useState(false);
+  const [f,setF]=useState({...workout});
+  const run=isRun(workout?.type), color=typeColor(workout?.type);
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  if(!workout) return null;
+  const exList=workout.exercises?workout.exercises.split("|").map(s=>s.trim()).filter(Boolean):[];
+  return (
+    <div style={{position:"fixed",inset:0,background:"#000000DD",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:16,overflowY:"auto"}} onClick={onClose}>
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:22,width:"100%",maxWidth:460,maxHeight:"90vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+        {!editing ? (
+          <>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
+              <div><div style={{color:C.muted,fontSize:12,marginBottom:4}}>{fmtDate(workout.date)}</div><div style={{fontWeight:800,fontSize:18}}>{workout.title}</div></div>
+              <span style={S.tag(color)}>{workout.type}</span>
+            </div>
+            {run&&workout.type!=="Rest"&&<div style={S.grid3}>
+              <div style={{background:C.surface2,borderRadius:8,padding:"10px 12px"}}><div style={{color:C.muted,fontSize:10,fontWeight:700}}>DISTANCE</div><div style={{fontWeight:800,fontSize:18,color:C.gold}}>{workout.distance||"—"}</div><div style={{color:C.muted,fontSize:11}}>{workout.unit}</div></div>
+              <div style={{background:C.surface2,borderRadius:8,padding:"10px 12px"}}><div style={{color:C.muted,fontSize:10,fontWeight:700}}>PACE</div><div style={{fontWeight:600,fontSize:12}}>{workout.paceTarget}</div></div>
+              <div style={{background:C.surface2,borderRadius:8,padding:"10px 12px"}}><div style={{color:C.muted,fontSize:10,fontWeight:700}}>ZONE</div><div style={{fontWeight:800,fontSize:18,color}}>{workout.hrZone}</div></div>
+            </div>}
+            {!run&&exList.length>0&&<div style={{marginTop:12}}>
+              <div style={{color,fontSize:11,fontWeight:700,marginBottom:8}}>THE SESSION</div>
+              <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                {exList.map((ex,i)=><div key={i} style={{display:"flex",gap:10,alignItems:"center",background:C.surface2,borderRadius:8,padding:"10px 12px"}}><div style={{width:22,height:22,borderRadius:6,background:color+"22",color,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:12,flexShrink:0}}>{i+1}</div><div style={{fontSize:13,lineHeight:1.4}}>{ex}</div></div>)}
+              </div>
+            </div>}
+            {run&&workout.warmup&&<div style={{marginTop:12,fontSize:12}}><b style={{color:C.muted}}>WARM-UP</b> · {workout.warmup}</div>}
+            {workout.mainSet&&<div style={{marginTop:10,background:C.gold+"11",border:`1px solid ${C.gold}33`,borderRadius:8,padding:12,fontSize:13}}><b style={{color:C.gold}}>Main Set:</b> {workout.mainSet}</div>}
+            {run&&workout.cooldown&&<div style={{marginTop:10,fontSize:12}}><b style={{color:C.muted}}>COOL-DOWN</b> · {workout.cooldown}</div>}
+            {workout.description&&<div style={{marginTop:14,fontSize:13,color:C.muted,lineHeight:1.7}}>{workout.description}</div>}
+            <div style={{display:"flex",gap:10,marginTop:18,flexWrap:"wrap"}}>
+              <button style={S.btnGhost} onClick={onClose}>Close</button>
+              <button style={{...S.btnGhost,borderColor:C.gold+"66",color:C.gold}} onClick={()=>{setF({...workout});setEditing(true);}}>✎ Edit</button>
+              {!logged&&workout.type!=="Rest"&&<button style={{...S.btnEmerald,flex:1}} onClick={()=>{onLog(workout);onClose();}}>Log This</button>}
+              {logged&&<span style={{...S.tag(C.emerald),padding:"10px 16px"}}>✓ Logged</span>}
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{fontWeight:800,fontSize:18,marginBottom:16}}>Edit Workout</div>
+            <div style={{display:"flex",flexDirection:"column",gap:12}}>
+              <div><label style={S.label}>Title</label><input style={S.input} value={f.title||""} onChange={e=>set("title",e.target.value)}/></div>
+              <div><label style={S.label}>Type</label><select style={S.select} value={f.type} onChange={e=>set("type",e.target.value)}>{["Easy Run","Tempo","Intervals","Long Run","Recovery Run","Push","Pull","Legs","Core","Upper Body","Rest","Cross Training"].map(t=><option key={t}>{t}</option>)}</select></div>
+              {isRun(f.type)&&f.type!=="Rest"&&<>
+                <div style={S.grid2}>
+                  <div><label style={S.label}>Distance (mi)</label><input style={S.input} type="number" step="0.1" value={f.distance||""} onChange={e=>set("distance",parseFloat(e.target.value)||0)}/></div>
+                  <div><label style={S.label}>Pace</label><input style={S.input} value={f.paceTarget||""} onChange={e=>set("paceTarget",e.target.value)}/></div>
+                </div>
+                <div><label style={S.label}>Warm-up</label><input style={S.input} value={f.warmup||""} onChange={e=>set("warmup",e.target.value)}/></div>
+                <div><label style={S.label}>Main set</label><textarea style={{...S.input,minHeight:60,resize:"vertical"}} value={f.mainSet||""} onChange={e=>set("mainSet",e.target.value)}/></div>
+                <div><label style={S.label}>Cool-down</label><input style={S.input} value={f.cooldown||""} onChange={e=>set("cooldown",e.target.value)}/></div>
+              </>}
+              {!isRun(f.type)&&f.type!=="Rest"&&<div><label style={S.label}>Exercises (use | between movements)</label><textarea style={{...S.input,minHeight:120,resize:"vertical"}} value={f.exercises||""} onChange={e=>set("exercises",e.target.value)} placeholder="Back Squat — 4×6, rest 2-3min | RDL — 3×8"/></div>}
+              <div><label style={S.label}>Description</label><textarea style={{...S.input,minHeight:50,resize:"vertical"}} value={f.description||""} onChange={e=>set("description",e.target.value)}/></div>
+              <div><label style={S.label}>Effort</label><select style={S.select} value={f.effort} onChange={e=>set("effort",e.target.value)}>{["Easy","Moderate","Hard","Rest"].map(t=><option key={t}>{t}</option>)}</select></div>
+            </div>
+            <div style={{display:"flex",gap:10,marginTop:18}}>
+              <button style={S.btnGhost} onClick={()=>setEditing(false)}>Cancel</button>
+              <button style={{...S.btnGold,flex:1}} onClick={()=>{onSaveEdit(f);setEditing(false);onClose();}}>Save Changes</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── HISTORY ───────────────────────────────────────────────────────────────────
+function History({ logs }) {
+  if(!logs.length) return <div style={S.card}><div style={S.ct}>History</div><div style={{color:C.muted,fontSize:13}}>No workouts logged yet.</div></div>;
   return (
     <div style={S.card}>
-      <div style={S.cardTitle}>History</div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {[...logs].reverse().slice(0, 12).map((l, i) => (
-          <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", background: C.surface2, borderRadius: 8 }}>
-            <div><div style={{ fontWeight: 600, fontSize: 13 }}>{l.workoutTitle}</div><div style={{ color: C.muted, fontSize: 11 }}>{fmtDate(l.date)}</div></div>
-            <div style={{ textAlign: "right" }}>{l.distance > 0 && <div style={{ color: C.gold, fontWeight: 700 }}>{l.distance} mi</div>}<div style={{ color: C.muted, fontSize: 11 }}>{["😴","😓","😐","😊","🔥"][l.felt-1]}</div></div>
+      <div style={S.ct}>Recent History</div>
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+        {[...logs].reverse().slice(0,12).map((l,i)=>(
+          <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 12px",background:C.surface2,borderRadius:8}}>
+            <div><div style={{fontWeight:600,fontSize:13}}>{l.workoutTitle}</div><div style={{color:C.muted,fontSize:11}}>{fmtDate(l.date)}</div></div>
+            <div style={{textAlign:"right"}}>{l.distance>0&&<div style={{color:C.gold,fontWeight:700}}>{l.distance} mi</div>}<div style={{color:C.muted,fontSize:11}}>{["😴","😓","😐","😊","🔥"][l.felt-1]}</div></div>
           </div>
         ))}
       </div>
@@ -671,166 +557,172 @@ function LogHistory({ logs }) {
   );
 }
 
-// ── WORKOUT DETAIL MODAL ───────────────────────────────────────────────────────
-function WorkoutDetailModal({ workout, onClose, onLog, logs }) {
-  const isLogged = logs.some(l => l.date === workout?.date);
-  const color = typeColor(workout?.type), run = isRun(workout?.type);
-  if (!workout) return null;
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "#000000CC", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={onClose}>
-      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: 24, width: "100%", maxWidth: 440 }} onClick={e => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
-          <div><div style={{ color: C.muted, fontSize: 12, marginBottom: 4 }}>{fmtDate(workout.date)}</div><div style={{ fontWeight: 800, fontSize: 18 }}>{workout.title}</div></div>
-          <span style={S.tag(color)}>{workout.type}</span>
-        </div>
-        {run && workout.type !== "Rest" && <div style={S.grid3}>
-          <div style={{ background: C.surface2, borderRadius: 8, padding: "10px 12px" }}><div style={{ color: C.muted, fontSize: 10, fontWeight: 700 }}>DISTANCE</div><div style={{ fontWeight: 800, fontSize: 18, color: C.gold }}>{workout.distance}</div><div style={{ color: C.muted, fontSize: 11 }}>{workout.unit}</div></div>
-          <div style={{ background: C.surface2, borderRadius: 8, padding: "10px 12px" }}><div style={{ color: C.muted, fontSize: 10, fontWeight: 700 }}>PACE</div><div style={{ fontWeight: 600, fontSize: 12 }}>{workout.paceTarget}</div></div>
-          <div style={{ background: C.surface2, borderRadius: 8, padding: "10px 12px" }}><div style={{ color: C.muted, fontSize: 10, fontWeight: 700 }}>ZONE</div><div style={{ fontWeight: 800, fontSize: 18, color }}>{workout.hrZone}</div></div>
-        </div>}
-        {!run && workout.exercises && <div style={{ marginTop: 12, background: color + "11", border: `1px solid ${color}33`, borderRadius: 8, padding: 12, fontSize: 13, lineHeight: 1.6 }}><b style={{ color }}>Movements:</b> {workout.exercises}</div>}
-        <div style={{ marginTop: 14, fontSize: 13, color: C.muted, lineHeight: 1.7 }}>{workout.description}</div>
-        {workout.mainSet && <div style={{ marginTop: 10, background: C.gold + "11", border: `1px solid ${C.gold}33`, borderRadius: 8, padding: 12, fontSize: 13 }}><b style={{ color: C.gold }}>Main Set:</b> {workout.mainSet}</div>}
-        <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-          <button style={S.btnGhost} onClick={onClose}>Close</button>
-          {!isLogged && workout.type !== "Rest" && <button style={{ ...S.btnEmerald, flex: 1 }} onClick={() => { onLog(workout); onClose(); }}>Log This</button>}
-          {isLogged && <span style={{ ...S.tag(C.emerald), padding: "10px 16px" }}>✓ Logged</span>}
-        </div>
-      </div>
-    </div>
-  );
-}
+const TABS=[{id:"today",label:"Today"},{id:"plan",label:"Plan"},{id:"paces",label:"Paces"},{id:"progress",label:"Progress"},{id:"coach",label:"Coach"}];
 
-const TABS = [{ id: "today", label: "Today" }, { id: "plan", label: "Plan" }, { id: "progress", label: "Progress" }, { id: "tools", label: "Tools" }];
-
-// ── MAIN APP ───────────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+//  MAIN APP
+// ════════════════════════════════════════════════════════════════════════════
 export default function TRCK() {
-  const [profile, setProfile] = useState(null);
-  const [plan, setPlan] = useState(null);
-  const [logs, setLogs] = useState([]);
-  const [tab, setTab] = useState("today");
-  const [currentWeek, setCurrentWeek] = useState(0);
-  const [logTarget, setLogTarget] = useState(null);
-  const [selectedWorkout, setSelectedWorkout] = useState(null);
-  const [notFeeling, setNotFeeling] = useState(false);
-  const [booting, setBooting] = useState(true);
-  const [extending, setExtending] = useState(false);
+  const [plan,setPlan]=useState(null);
+  const [logs,setLogs]=useState([]);
+  const [weightHistory,setWeightHistory]=useState([]);
+  const [customPaces,setCustomPaces]=useState(null);
+  const [lastPhoto,setLastPhoto]=useState(null);
+  const [tab,setTab]=useState("today");
+  const [weekIdx,setWeekIdx]=useState(0);
+  const [logTarget,setLogTarget]=useState(null);
+  const [openWorkout,setOpenWorkout]=useState(null);
+  const [booting,setBooting]=useState(true);
+  const [building,setBuilding]=useState(false);
+  const [extending,setExtending]=useState(false);
 
-  useEffect(() => { (async () => {
-    const p = await load("trck_profile"), pl = await load("trck_plan"), lg = await load("trck_logs");
-    if (p && pl) { setProfile(p); setPlan(pl); setLogs(lg || []); }
+  useEffect(()=>{(async()=>{
+    const p=await load("trck_plan"), lg=await load("trck_logs"), wh=await load("trck_weight"), cp=await load("trck_paces"), ph=await load("trck_photo");
+    if(p) setPlan(p);
+    setLogs(lg||[]); setWeightHistory(wh||[]); setCustomPaces(cp||null); setLastPhoto(ph||null);
     setBooting(false);
-  })(); }, []);
+  })();},[]);
 
-  useEffect(() => { if (!plan) return; const t = todayStr(); const idx = plan.weeks.findIndex(w => w.workouts.some(wk => wk.date >= t)); if (idx >= 0) setCurrentWeek(idx); }, [plan]);
+  useEffect(()=>{ if(!plan)return; const t=todayStr(); const idx=plan.weeks.findIndex(w=>w.workouts.some(wk=>wk.date>=t)); if(idx>=0)setWeekIdx(idx); },[plan]);
 
-  const todayWorkout = plan?.weeks.flatMap(w => w.workouts).find(w => w.date === todayStr());
-
-  async function saveLog(entry) { const u = [...logs, entry]; setLogs(u); await save("trck_logs", u); }
-
-  async function swapWorkouts(weekIdx, fromIdx, toIdx) {
-    const updated = { ...plan, weeks: plan.weeks.map((w, wi) => {
-      if (wi !== weekIdx) return w;
-      const workouts = w.workouts.map(x => ({ ...x }));
-      // swap the date fields so the two sessions trade calendar slots
-      const dA = workouts[fromIdx].date, dB = workouts[toIdx].date;
-      workouts[fromIdx].date = dB; workouts[toIdx].date = dA;
-      workouts.sort((a, b) => a.date.localeCompare(b.date));
-      return { ...w, workouts };
-    }) };
-    setPlan(updated); await save("trck_plan", updated);
+  async function buildInitialPlan(){
+    setBuilding(true);
+    try{
+      const totalWeeks=28;
+      let weeks=buildSkeleton(todayStr(),2); // build 2 detailed weeks
+      for(let i=0;i<weeks.length;i++){ await fillWeekDetail(weeks[i],i+1,totalWeeks); }
+      const newPlan={planName:"Lean & Fast — 206 → 145",totalWeeks,goal5k:PROFILE.goal5k,weeks};
+      setPlan(newPlan); await save("trck_plan",newPlan);
+      // seed starting weight
+      const wh=[{date:todayStr(),weight:PROFILE.startWeight}];
+      setWeightHistory(wh); await save("trck_weight",wh);
+    }catch(e){ alert("Couldn't build plan — try again. ("+e.message+")"); }
+    setBuilding(false);
   }
 
-  async function logWeight(weight) {
-    const hist = [...(profile.weightHistory || []), { date: todayStr(), weight }];
-    const updated = { ...profile, weightHistory: hist };
-    // Recompute nutrition as weight drops
-    updated.nutrition = computeNutrition({ weightLbs: weight, goalWeightLbs: parseFloat(profile.goalWeightLbs), heightIn: parseFloat(profile.heightIn), age: parseFloat(profile.age), sex: profile.sex, dietMode: profile.dietMode });
-    setProfile(updated); await save("trck_profile", updated);
-  }
-
-  async function extendPlan() {
+  async function extendPlan(){
     setExtending(true);
-    try {
-      const built = plan.weeks.length;
-      const nextStart = built + 1;
-      const nextEnd = Math.min(built + 2, plan.totalWeeks);
-      const lastDate = plan.weeks[built - 1].workouts[plan.weeks[built - 1].workouts.length - 1].date;
-      const startDate = `${new Date(new Date(lastDate).getTime() + 86400000).toISOString().slice(0,10)}`;
-      const recentLogs = logs.slice(-10).map(l => `${l.date}: ${l.workoutTitle} (felt ${l.felt}/5)`).join("; ");
-      const prompt = `Continue this training plan. Build weeks ${nextStart} to ${nextEnd} of ${plan.totalWeeks}.
-ATHLETE: ${profile.name}, goals: ${(profile.goals || []).join(", ")}, ${profile.runDaysPerWeek} runs + ${profile.liftDaysPerWeek} lifts/week, long run ${profile.longRunDay}, ${profile.experience}.
-Coach notes: ${profile.trainingNotes || "none"}
-Recent training (adapt based on how they felt): ${recentLogs || "none yet"}
-These weeks start ${startDate}. Progress the periodization appropriately (this is week ${nextStart}+ of ${plan.totalWeeks}).
-Same coaching rules: no hard run after legs, protect long run, real rest, progress load.
-Return ONLY valid JSON: { "weeks": [ {same schema as before with weekNumber ${nextStart}+} ] }`;
-      const raw = await callClaude("Return only valid JSON. No markdown.", prompt, 8000);
-      const result = extractJSON(raw);
-      const updated = { ...plan, weeks: [...plan.weeks, ...result.weeks] };
-      setPlan(updated); await save("trck_plan", updated);
-      setCurrentWeek(built);
-    } catch (e) { console.error(e); alert("Couldn't build next weeks. Try again."); }
+    try{
+      const built=plan.weeks.length;
+      const lastDate=plan.weeks[built-1].workouts[plan.weeks[built-1].workouts.length-1].date;
+      let newWeeks=buildSkeleton(addDays(lastDate,1),2);
+      for(let i=0;i<newWeeks.length;i++){ await fillWeekDetail(newWeeks[i],built+i+1,plan.totalWeeks); }
+      const updated={...plan,weeks:[...plan.weeks,...newWeeks]};
+      setPlan(updated); await save("trck_plan",updated);
+      setWeekIdx(built);
+    }catch(e){ alert("Couldn't build next weeks — try again."); }
     setExtending(false);
   }
 
-  async function resetApp() {
-    if (!confirm("Reset TRCK and start over?")) return;
-    await del("trck_profile"); await del("trck_plan"); await del("trck_logs");
-    setProfile(null); setPlan(null); setLogs([]);
+  async function saveLog(entry){ const u=[...logs,entry]; setLogs(u); await save("trck_logs",u); }
+  async function logWeight(weight){ const u=[...weightHistory,{date:todayStr(),weight}]; setWeightHistory(u); await save("trck_weight",u); }
+  async function savePaces(p){ setCustomPaces(p); await save("trck_paces",p); }
+  async function markPhoto(d){ setLastPhoto(d); await save("trck_photo",d); }
+  async function swapWorkouts(wi,from,to){
+    const updated={...plan,weeks:plan.weeks.map((w,i)=>{ if(i!==wi)return w; const ws=w.workouts.map(x=>({...x})); const a=ws[from].date,b=ws[to].date; ws[from].date=b; ws[to].date=a; ws.sort((x,y)=>x.date.localeCompare(y.date)); return {...w,workouts:ws}; })};
+    setPlan(updated); await save("trck_plan",updated);
+  }
+  async function saveEdit(edited){
+    const fixed={...plan,weeks:plan.weeks.map(w=>({...w,workouts:w.workouts.map(x=>(x.date===openWorkout.date&&x.title===openWorkout.title&&x.type===openWorkout.type)?{...x,...edited}:x)}))};
+    setPlan(fixed); await save("trck_plan",fixed);
+  }
+  async function resetAll(){
+    if(!confirm("Reset everything and rebuild your plan?"))return;
+    ["trck_plan","trck_logs","trck_weight","trck_paces","trck_photo"].forEach(k=>localStorage.removeItem(k));
+    setPlan(null); setLogs([]); setWeightHistory([]); setCustomPaces(null); setLastPhoto(null);
   }
 
-  if (booting) return <div style={{ ...S.app, alignItems: "center", justifyContent: "center" }}><div style={{ color: C.gold, fontWeight: 900, fontSize: 28, letterSpacing: "0.15em" }}>TRCK</div><div style={{ color: C.muted, marginTop: 8 }}>Loading...</div></div>;
-  if (!profile || !plan) return <div style={S.app}><nav style={S.nav}><div style={S.logo}>TRCK</div></nav><Onboarding onDone={(p, pl, lg) => { setProfile(p); setPlan(pl); setLogs(lg); }} /></div>;
+  if(booting) return <div style={{...S.app,alignItems:"center",justifyContent:"center"}}><div style={{color:C.gold,fontWeight:900,fontSize:28,letterSpacing:"0.2em"}}>TRCK</div></div>;
 
-  const totalLogged = logs.reduce((s, l) => s + (l.distance || 0), 0);
-  const completed = logs.length;
-  const totalWorkouts = plan.weeks.flatMap(w => w.workouts).filter(w => w.type !== "Rest").length;
+  // First run — build the plan
+  if(!plan) return (
+    <div style={S.app}>
+      <nav style={S.nav}><div style={S.logo}>TRCK</div></nav>
+      <div style={{...S.main,maxWidth:460,paddingTop:48}}>
+        <div style={{fontSize:30,fontWeight:900,marginBottom:6}}>Welcome back,<br/>Francisco.</div>
+        <div style={{color:C.muted,fontSize:15,lineHeight:1.5,marginBottom:24}}>Your plan's ready to build — 206→145, sub-20 5K, your 5-day split. Paces, fuel, refeeds, weigh-ins, all dialed to you.</div>
+        <div style={S.card}>
+          <div style={S.ct}>Your Setup</div>
+          {[["Goal","206 → 145 lbs · sub-20 5K"],["Split","4 runs + 3 lifts / week"],["Fuel","1,800 cal · 148g protein · Sat refeed"],["Weigh-ins","Wed + Sat (weekly avg)"]].map(([k,v])=>(
+            <div key={k} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:`1px solid ${C.border}`,fontSize:13}}><span style={{color:C.muted}}>{k}</span><span style={{fontWeight:600,textAlign:"right"}}>{v}</span></div>
+          ))}
+        </div>
+        <button style={{...S.btnGold,width:"100%",marginTop:8}} onClick={buildInitialPlan} disabled={building}>{building?"Coach is building your plan…":"Build My Plan →"}</button>
+        {building && <div style={{color:C.muted,fontSize:12,marginTop:10,textAlign:"center"}}>Building your first 2 weeks in detail. Takes a few seconds.</div>}
+      </div>
+    </div>
+  );
+
+  const today=todayStr();
+  const todayWorkout=plan.weeks.flatMap(w=>w.workouts).find(w=>w.date===today);
+  const isRefeed=new Date().getDay()===PROFILE.refeedDay;
+  const isSunday=new Date().getDay()===0;
+  const curWeekNum=plan.weeks[weekIdx]?.weekNumber||1;
+  const zones=customPaces||paceZones(PROFILE.current5k);
+  const proj=projectGoalDate(weightHistory);
 
   return (
     <div style={S.app}>
-      <nav style={S.nav}><div style={S.logo}>TRCK</div><div style={{ color: C.muted, fontSize: 13 }}>{profile.name}</div></nav>
-      <div style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, padding: "10px 16px" }}>
-        <div style={{ display: "flex", gap: 20, maxWidth: 900, margin: "0 auto", overflowX: "auto" }}>
-          {[{ l: "Goals", v: (profile.goals || []).length === 1 ? profile.goals[0] : `${(profile.goals || []).length} goals` }, { l: "Logged", v: `${totalLogged.toFixed(0)} mi` }, { l: "Done", v: `${completed}/${totalWorkouts}+` }, { l: "Week", v: `${currentWeek + 1}/${plan.totalWeeks}` }].map(({ l, v }) => (
-            <div key={l} style={{ flexShrink: 0 }}><div style={{ color: C.muted, fontSize: 10, fontWeight: 700, letterSpacing: "0.08em" }}>{l.toUpperCase()}</div><div style={{ fontWeight: 700, fontSize: 14, color: C.gold }}>{v}</div></div>
+      <nav style={S.nav}><div style={S.logo}>TRCK</div><div style={{color:C.muted,fontSize:13}}>{PROFILE.name}</div></nav>
+
+      {/* goal strip */}
+      <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"10px 16px"}}>
+        <div style={{display:"flex",gap:20,maxWidth:680,margin:"0 auto",overflowX:"auto"}}>
+          {[["Goal","Sub-20 5K"],["Weight",`${weightHistory.length?weightHistory[weightHistory.length-1].weight:206}→145`],["ETA",proj&&proj.weeksLeft?`~${Math.round(proj.weeksLeft)} wks`:"—"],["Week",`${curWeekNum}/${plan.totalWeeks}`]].map(([l,v])=>(
+            <div key={l} style={{flexShrink:0}}><div style={{color:C.muted,fontSize:10,fontWeight:700,letterSpacing:"0.08em"}}>{l.toUpperCase()}</div><div style={{fontWeight:700,fontSize:14,color:C.gold}}>{v}</div></div>
           ))}
         </div>
       </div>
-      <div style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, padding: "0 16px" }}>
-        <div style={{ display: "flex", gap: 4, maxWidth: 900, margin: "0 auto" }}>
-          {TABS.map(t => <button key={t.id} onClick={() => setTab(t.id)} style={{ background: "transparent", border: "none", borderBottom: `2px solid ${tab === t.id ? C.gold : "transparent"}`, color: tab === t.id ? C.gold : C.muted, padding: "14px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: FONT }}>{t.label}</button>)}
+
+      {/* tabs */}
+      <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"0 16px"}}>
+        <div style={{display:"flex",gap:4,maxWidth:680,margin:"0 auto"}}>
+          {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{background:"transparent",border:"none",borderBottom:`2px solid ${tab===t.id?C.gold:"transparent"}`,color:tab===t.id?C.gold:C.muted,padding:"14px 14px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:FONT}}>{t.label}</button>)}
         </div>
       </div>
 
       <div style={S.main}>
-        {tab === "today" && <>
-          <TodayCard workout={todayWorkout} onLog={setLogTarget} logs={logs} setNotFeeling={setNotFeeling} notFeeling={notFeeling} />
-          <NutritionCard profile={profile} />
+        {tab==="today"&&<>
+          <div style={{marginBottom:16}}>
+            <div style={{color:C.muted,fontSize:13,fontWeight:600}}>{prettyToday()}</div>
+            <div style={{fontSize:22,fontWeight:800,marginTop:2}}>Sub-20 5K{proj&&proj.weeksLeft?` · ~${Math.round(proj.weeksLeft)} wks to 145`:""}</div>
+          </div>
+          <TodayCard workout={todayWorkout} paces={zones} onLog={setLogTarget} logged={logs.some(l=>l.date===today)} onOpen={setOpenWorkout}/>
+          <FuelCard isRefeed={isRefeed}/>
+          <WeighInCard history={weightHistory} onLog={logWeight}/>
+          {isSunday && <CheckInCard plan={plan} logs={logs} weightHistory={weightHistory}/>}
         </>}
-        {tab === "plan" && <>
-          <div style={{ marginBottom: 16 }}><div style={S.h1}>{plan.planName}</div><div style={{ color: C.muted, fontSize: 14 }}>{plan.totalWeeks} weeks · {profile.runDaysPerWeek} runs + {profile.liftDaysPerWeek} lifts/week</div></div>
-          <WeekCalendar plan={plan} logs={logs} currentWeek={currentWeek} setCurrentWeek={setCurrentWeek} onSelectWorkout={setSelectedWorkout} onExtendPlan={extendPlan} extending={extending} onSwap={swapWorkouts} />
+
+        {tab==="plan"&&<>
+          <div style={{marginBottom:16}}><div style={S.h1}>{plan.planName}</div><div style={{color:C.muted,fontSize:14}}>{plan.totalWeeks} weeks · 4 runs + 3 lifts / week</div></div>
+          <ArcOverview plan={plan} currentWeekNum={curWeekNum}/>
+          <WeekCalendar plan={plan} logs={logs} weekIdx={weekIdx} setWeekIdx={setWeekIdx} onSelect={setOpenWorkout} onSwap={swapWorkouts} onExtend={extendPlan} extending={extending}/>
         </>}
-        {tab === "progress" && <>
-          <WeightTracker profile={profile} onLogWeight={logWeight} />
-          <MileageGraph plan={plan} logs={logs} />
-          <ShoeTracker profile={profile} logs={logs} />
-          <LogHistory logs={logs} />
+
+        {tab==="paces"&&<>
+          <PacesScreen customPaces={customPaces} onSave={savePaces}/>
         </>}
-        {tab === "tools" && <>
-          <NutritionCard profile={profile} />
-          <RaceCalc />
+
+        {tab==="progress"&&<>
+          <GoalDateCard history={weightHistory}/>
+          <WeighInCard history={weightHistory} onLog={logWeight}/>
+          <PhotosCard lastPhoto={lastPhoto} onMark={markPhoto}/>
+          <History logs={logs}/>
+        </>}
+
+        {tab==="coach"&&<>
+          <CheckInCard plan={plan} logs={logs} weightHistory={weightHistory}/>
+          <FuelCard isRefeed={isRefeed}/>
           <div style={S.card}>
-            <div style={S.cardTitle}>Plan Info</div>
-            <div style={{ color: C.muted, fontSize: 13, marginBottom: 14 }}>Started {fmtDate(profile.startDate)} · {profile.experience} · {profile.dietMode} diet</div>
-            <button style={S.btnRed} onClick={resetApp}>Reset & Start New Plan</button>
+            <div style={S.ct}>Plan Info</div>
+            <div style={{color:C.muted,fontSize:13,marginBottom:14,lineHeight:1.5}}>206→145 · sub-20 5K · started {weightHistory.length?fmtDate(weightHistory[0].date):"today"}. Built {plan.weeks.length} of {plan.totalWeeks} weeks.</div>
+            <button style={S.btnRed} onClick={resetAll}>Reset & Rebuild Plan</button>
           </div>
         </>}
       </div>
 
-      {logTarget && <LogModal workout={logTarget} onSave={saveLog} onClose={() => setLogTarget(null)} />}
-      {selectedWorkout && <WorkoutDetailModal workout={selectedWorkout} onClose={() => setSelectedWorkout(null)} onLog={setLogTarget} logs={logs} />}
+      {logTarget && <LogModal workout={logTarget} onSave={saveLog} onClose={()=>setLogTarget(null)}/>}
+      {openWorkout && <WorkoutModal workout={openWorkout} logged={logs.some(l=>l.date===openWorkout.date)} onClose={()=>setOpenWorkout(null)} onLog={setLogTarget} onSaveEdit={saveEdit}/>}
     </div>
   );
 }
